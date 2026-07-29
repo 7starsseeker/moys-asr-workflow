@@ -250,6 +250,13 @@ MAWE 右上角可切换中文 / English；编辑完成后点“保存工程”�
 
 😭*我说我只有一台 AMD 显卡的台式机和一台 Mac Mini 所以跑不了本地模型有懂的吗*  
 
+## 项目边界
+
+本仓库主要关注云端 API 工作流，不包含：本地模型与 GPU 依赖、除 Qwen / Fun-ASR / Soniox 之外的 ASR 引擎、模型对比工具、剪辑软件脚本、样例媒体、缓存、个人表情包和任何密钥。
+
+> 💡 **本地模型支持**：本仓库额外提供了本地 Qwen3-ASR 和 faster-whisper 转写能力，作为独立模块附加在云端 API 工作流之上。详见 [docs/LOCAL_DEPLOY.md](docs/LOCAL_DEPLOY.md)。
+
+如果你准备修改或维护它，请先读 [AGENTS.md](AGENTS.md)。第三方组件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 ## 致谢
 
 ❤️ 感谢 @Hanekit 老师的宝贵意见和建议  

@@ -1773,6 +1773,12 @@
 }
 .waveform-cue-badge.color { color: #ffd54a; }
 .waveform-cue-badge.sticker { color: #b8d9ff; }
+/* 单行（基础）模式块高不是固定 35px，而是 max(35px, min(72px, 40%))
+   （见 .waveform-basic .waveform-cue-block）；徽章 bottom 同步按
+   「块底 7 + 实际块高 + 间距 2」计算，否则会嵌进更高的单行块内。 */
+.waveform-basic .waveform-cue-badge {
+  bottom: calc(9px + max(35px, min(72px, 40%)) + var(--badge-stack-index, 0) * 16px);
+}
 .waveform-cue-block.selected {
   z-index: 6;
   outline: 2px solid #ffd54a;
@@ -1850,7 +1856,7 @@
 
 <h1>
   <span class="media-name empty" id="media-name" title="">未加载媒体</span>
-  <span class="gen-time" id="gen-time" data-label="生成时间">生成时间 2026-07-29 17:15</span>
+  <span class="gen-time" id="gen-time" data-label="生成时间">生成时间 2026-07-29 23:45</span>
   <span class="json-name empty" id="json-name" title="点击复制 JSON 文件名">未加载工程</span>
 </h1>
 <div class="toolbar row-actions">
@@ -2190,8 +2196,8 @@
   <div class="help-group">
     <span class="help-title">播放与编辑</span>
     <span><kbd>空格</kbd> 播放/暂停 <kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> 倍速 ×0.5/重置/×2</span>
-    <span><kbd>A</kbd> 上一条字幕 <kbd>D</kbd> 下一条字幕</span>
-    <span><kbd>Shift+A</kbd> 向前多选 <kbd>Shift+D</kbd> 向后多选</span>
+    <span><kbd>A</kbd>或<kbd>W</kbd> 上一条字幕 <kbd>D</kbd>或<kbd>S</kbd> 下一条字幕</span>
+    <span><kbd>Shift+A/W</kbd> 向前多选 <kbd>Shift+D/S</kbd> 向后多选</span>
     <span><kbd>F</kbd> 跳转并播放选中字幕</span>
     <span><kbd>Delete</kbd> 删除所选字幕</span>
     <span><kbd>Ctrl+Z</kbd> 撤销</span>
@@ -3200,7 +3206,7 @@
     '合并字幕时插入字符': 'Merge separator', '留空则直接拼接': 'Leave blank to join directly',
     '合并两条字幕时，中间插入的字符（如果不需要可以留空）': 'Characters inserted between merged subtitles (leave blank to join directly)',
     '字幕编辑拆分按键': 'Subtitle split key', '字幕（编辑状态下）拆分按键': 'Subtitle split key (while editing)',
-    '同时选中分组内项目': 'Select all group members',
+    '同时选中分组内项目': 'Select all group members', '或': 'or',
     '显示窗口': 'Visible window', '振幅': 'Amplitude',
     '5 秒': '5 sec', '10 秒': '10 sec', '20 秒': '20 sec', '30 秒': '30 sec',
     '每行长度': 'Seconds per row', '每行高度': 'Row height',
@@ -6228,8 +6234,8 @@
 })();
 const DATA = {"segments": [], "media": "", "language": "", "model": ""};
 let FILENAME_BASE = "untitled";
-const STICKERS = [{"name": "大狗/10分10分-wb", "filename": "10分10分-wb.png", "rel": "大狗/10分10分-wb.png"}, {"name": "大狗/21-嘻嘻-wb", "filename": "21-嘻嘻-wb.png", "rel": "大狗/21-嘻嘻-wb.png"}, {"name": "大狗/Quson-wb", "filename": "Quson-wb.png", "rel": "大狗/Quson-wb.png"}, {"name": "大狗/不可以-无-wb", "filename": "不可以-无-wb.png", "rel": "大狗/不可以-无-wb.png"}, {"name": "大狗/不开心-bg", "filename": "不开心-bg.png", "rel": "大狗/不开心-bg.png"}, {"name": "大狗/不要-wb", "filename": "不要-wb.png", "rel": "大狗/不要-wb.png"}, {"name": "大狗/举刀-wb", "filename": "举刀-wb.jpg", "rel": "大狗/举刀-wb.jpg"}, {"name": "大狗/什么-wb", "filename": "什么-wb.png", "rel": "大狗/什么-wb.png"}, {"name": "大狗/什么啊-wb", "filename": "什么啊-wb.png", "rel": "大狗/什么啊-wb.png"}, {"name": "大狗/傻乎乎", "filename": "傻乎乎.png", "rel": "大狗/傻乎乎.png"}, {"name": "大狗/吃包包-wb", "filename": "吃包包-wb.png", "rel": "大狗/吃包包-wb.png"}, {"name": "大狗/吐舌-wb", "filename": "吐舌-wb.png", "rel": "大狗/吐舌-wb.png"}, {"name": "大狗/呆住", "filename": "呆住.png", "rel": "大狗/呆住.png"}, {"name": "大狗/唉你这-wb", "filename": "唉你这-wb.png", "rel": "大狗/唉你这-wb.png"}, {"name": "大狗/啊这-wb", "filename": "啊这-wb.png", "rel": "大狗/啊这-wb.png"}, {"name": "大狗/喝茶-wb", "filename": "喝茶-wb.png", "rel": "大狗/喝茶-wb.png"}, {"name": "大狗/嗯？怎？", "filename": "嗯？怎？.png", "rel": "大狗/嗯？怎？.png"}, {"name": "大狗/在干什么-wb", "filename": "在干什么-wb.png", "rel": "大狗/在干什么-wb.png"}, {"name": "大狗/墨聪明-wb", "filename": "墨聪明-wb.png", "rel": "大狗/墨聪明-wb.png"}, {"name": "大狗/好变态-wb", "filename": "好变态-wb.png", "rel": "大狗/好变态-wb.png"}, {"name": "大狗/尴尬-wb", "filename": "尴尬-wb.png", "rel": "大狗/尴尬-wb.png"}, {"name": "大狗/平身-wb", "filename": "平身-wb.png", "rel": "大狗/平身-wb.png"}, {"name": "大狗/开心大叫-wb", "filename": "开心大叫-wb.png", "rel": "大狗/开心大叫-wb.png"}, {"name": "大狗/忠诚-wb", "filename": "忠诚-wb.png", "rel": "大狗/忠诚-wb.png"}, {"name": "大狗/快打钱", "filename": "快打钱.png", "rel": "大狗/快打钱.png"}, {"name": "大狗/思索", "filename": "思索.png", "rel": "大狗/思索.png"}, {"name": "大狗/思考-wb", "filename": "思考-wb.png", "rel": "大狗/思考-wb.png"}, {"name": "大狗/慌张-wb", "filename": "慌张-wb.png", "rel": "大狗/慌张-wb.png"}, {"name": "大狗/拇指-wb", "filename": "拇指-wb.png", "rel": "大狗/拇指-wb.png"}, {"name": "大狗/按按钮", "filename": "按按钮.gif", "rel": "大狗/按按钮.gif"}, {"name": "大狗/杀戮-wb", "filename": "杀戮-wb.png", "rel": "大狗/杀戮-wb.png"}, {"name": "大狗/消沉-wb", "filename": "消沉-wb.png", "rel": "大狗/消沉-wb.png"}, {"name": "大狗/爆炸-wb", "filename": "爆炸-wb.png", "rel": "大狗/爆炸-wb.png"}, {"name": "大狗/网络皇帝-wb", "filename": "网络皇帝-wb.png", "rel": "大狗/网络皇帝-wb.png"}, {"name": "大狗/蛋花眼哭哭-wb", "filename": "蛋花眼哭哭-wb.png", "rel": "大狗/蛋花眼哭哭-wb.png"}, {"name": "大狗/觉得骄傲-wb", "filename": "觉得骄傲-wb.png", "rel": "大狗/觉得骄傲-wb.png"}, {"name": "大狗/记小本本-wb", "filename": "记小本本-wb.png", "rel": "大狗/记小本本-wb.png"}, {"name": "大狗/记小本本-看本本-wb", "filename": "记小本本-看本本-wb.png", "rel": "大狗/记小本本-看本本-wb.png"}, {"name": "大狗/诶嘿-wb", "filename": "诶嘿-wb.png", "rel": "大狗/诶嘿-wb.png"}, {"name": "大狗/超多疑问", "filename": "超多疑问.jpg", "rel": "大狗/超多疑问.jpg"}, {"name": "大狗/问号", "filename": "问号.png", "rel": "大狗/问号.png"}, {"name": "大狗/震撼-wb", "filename": "震撼-wb.png", "rel": "大狗/震撼-wb.png"}, {"name": "大狗/黑脸", "filename": "黑脸.png", "rel": "大狗/黑脸.png"}];
-let STICKER_ROOT = "E:/MoyCloud/Resource/素材/表情包";  // 表情包根目录的绝对路径（无尾斜杠）
+const STICKERS = [];
+let STICKER_ROOT = "";  // 表情包根目录的绝对路径（无尾斜杠）
 const STICKER_URL_PREFIX = "";
 const SERVER_CONFIG = null;
 const EDITOR_SETTINGS_KEY = 'moy.asr.editor.settings.v1';
@@ -8432,12 +8438,12 @@ document.addEventListener('keydown', (e) => {
   flashHint(`倍速: ${fmtRate(r)}`);
 });
 
-// A/D：跳转到上一条/下一条字幕的句首并单选。
-// Shift+A/D：保留当前选择，并向前/后追加选择一条字幕。
+// A/D（或 W/S）：跳转到上一条/下一条字幕的句首并单选。W/S 与 A/D 等价，对应上下方向。
+// Shift+A/D（或 Shift+W/S）：保留当前选择，并向前/后追加选择一条字幕。
 // 跳转本身不改变播放状态：播放中会从新位置继续播放，暂停中只移动播放指针。
 document.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
-  if (key !== 'a' && key !== 'd') return;
+  if (key !== 'a' && key !== 'd' && key !== 'w' && key !== 's') return;
   if (editingState) return;
   const a = document.activeElement;
   if (a && (
@@ -8454,7 +8460,7 @@ document.addEventListener('keydown', (e) => {
   if (ctxmenu.classList.contains('show')) return;
   if (e.ctrlKey || e.altKey || e.metaKey) return;
 
-  const direction = key === 'a' ? -1 : 1;
+  const direction = (key === 'a' || key === 'w') ? -1 : 1;
   const next = e.shiftKey
     ? window.AsrEditorUtils.findCueSelectionExtensionTarget(
       DATA.segments,
