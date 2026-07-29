@@ -18,7 +18,7 @@
   const ROOT_EDGE_DROP_MAX_PX = 48;
   const ZOOM_PRESETS = [5, 10, 20, 30, 60];
   const ROW_PRESETS = [5, 10, 20, 30];
-  const ROW_HEIGHT = 96;
+  const ROW_HEIGHT_PRESETS = [64, 80, 96, 120, 144, 168];
   const ROW_GAP = 10;
   const MIN_CUE_MS = 100;
   const MIN_WAVEFORM_SCALE = 0.25;
@@ -30,19 +30,22 @@
   const DEFAULT_LAYOUT_ROWS = [42, 18, 40];
   const PREVIOUS_DEFAULT_LAYOUT_ROWS = [42, 27, 31];
   const DEFAULT_SETTINGS = {
-    mode: 'basic',
+    mode: 'multi',
     layout: 'wave-right',
     visibleSeconds: 20,
     secondsPerRow: 10,
+    rowHeight: 120,
     side: 'left',
     splitPercent: 60,
-    layoutColumnPercent: 58,
+    layoutColumnPercent: 44,
     layoutRows: [...DEFAULT_LAYOUT_ROWS],
     freeOrder: [...DEFAULT_FREE_ORDER],
     layoutTree: null,
     layoutEditing: false,
     waveformScale: 1,
     disabledDisplay: 'dim',
+    showGroupBadges: true,
+    dragPlayhead: true,
   };
   const PALETTE = {
     red: '#e74c3c',
@@ -54,6 +57,30 @@
 
   function clamp(value, low, high) {
     return Math.max(low, Math.min(high, value));
+  }
+
+  // 组序号徽章：颜色与表情包分组彼此独立，因此同一条字幕可同时拥有两枚徽章。
+  // 颜色组大小 <2 时不显示；表情包即使只有单条也显示 🦊 作为非视觉化标记。
+  function computeGroupBadges(segments) {
+    const badges = new Map();
+    const apply = (type, headField, refField) => {
+      segments.forEach((seg, headIdx) => {
+        if (!seg[headField]) return;
+        const members = [headIdx];
+        segments.forEach((candidate, idx) => {
+          if (candidate[refField]?.headIdx === headIdx) members.push(idx);
+        });
+        if (type === 'color' && members.length < 2) return;
+        members.forEach((idx, i) => {
+          const cueBadges = badges.get(idx) || [];
+          cueBadges.push({ type, ordinal: i + 1, total: members.length });
+          badges.set(idx, cueBadges);
+        });
+      });
+    };
+    apply('color', 'color', 'color_ref');
+    apply('sticker', 'sticker', 'sticker_ref');
+    return badges;
   }
 
   function roundMs(value) {
@@ -90,7 +117,7 @@
     };
   }
 
-  function legacyOrderToLayoutTree(order, columnPercent = 58, rows = DEFAULT_LAYOUT_ROWS) {
+  function legacyOrderToLayoutTree(order, columnPercent = DEFAULT_SETTINGS.layoutColumnPercent, rows = DEFAULT_LAYOUT_ROWS) {
     const ids = normalizeFreeOrder(order);
     const [top, middle, bottom] = normalizeLayoutRows(rows);
     const left = splitLayoutNode(
@@ -335,6 +362,8 @@
           ? Number(parsed.visibleSeconds) : DEFAULT_SETTINGS.visibleSeconds,
         secondsPerRow: ROW_PRESETS.includes(Number(parsed.secondsPerRow))
           ? Number(parsed.secondsPerRow) : DEFAULT_SETTINGS.secondsPerRow,
+        rowHeight: ROW_HEIGHT_PRESETS.includes(Number(parsed.rowHeight))
+          ? Number(parsed.rowHeight) : DEFAULT_SETTINGS.rowHeight,
         side: parsed.side === 'right' ? 'right' : 'left',
         splitPercent: layoutData.splitPercent,
         layoutColumnPercent: layoutData.columnPercent,
@@ -344,6 +373,8 @@
         layoutEditing: false,
         waveformScale: clampWaveformScale(Number(parsed.waveformScale) || DEFAULT_SETTINGS.waveformScale),
         disabledDisplay: parsed.disabledDisplay === 'hidden' ? 'hidden' : 'dim',
+        showGroupBadges: parsed.showGroupBadges !== false,
+        dragPlayhead: parsed.dragPlayhead !== false,
       };
     } catch (_) {
       return {
@@ -452,6 +483,107 @@
     return segments;
   }
 
+  // Alt-drag a shared resize handle moves ONLY the hit side, leaving the
+  // neighboring segment's opposite edge untouched. This is the independent
+  // counterpart to applySharedBoundary, which moves both sides linked.
+  // edge === 'end' moves segments[leftIndex].end; 'start' moves
+  // segments[leftIndex + 1].start. The moved edge is clamped to keep at
+  // least minDuration inside its own segment and not cross its other edge.
+  function applyIndependentEdge(segments, leftIndex, edge, valueMs, minDuration = MIN_CUE_MS) {
+    const left = segments[leftIndex];
+    const right = segments[leftIndex + 1];
+    if (!left || !right || (edge !== 'end' && edge !== 'start')) return segments;
+    const value = roundMs(valueMs);
+    if (edge === 'end') {
+      const lower = left.start + minDuration;
+      const upper = Number.isFinite(left.end) ? left.end : Infinity;
+      // 不越过右侧段的起始，避免产生负时长或重叠；但不强制拉动邻居。
+      const ceiling = Number.isFinite(right.start) ? right.start : upper;
+      const next = clamp(value, lower, Math.min(upper, ceiling));
+      const oldEnd = left.end;
+      left.end = next;
+      left.items = remapItems(left.items, left.start, oldEnd, left.start, next);
+    } else {
+      const upper = right.end - minDuration;
+      const floor = Number.isFinite(right.start) ? right.start : 0;
+      const base = Number.isFinite(left.end) ? left.end : floor;
+      const next = clamp(value, Math.max(floor, base), upper);
+      const oldStart = right.start;
+      right.start = next;
+      right.items = remapItems(right.items, oldStart, right.end, next, right.end);
+    }
+    return segments;
+  }
+
+  // Safe split point selection for the razor tool. Given a segment and a
+  // pointer time, prefer the nearest item boundary (midpoint between adjacent
+  // items' end/start); otherwise fall back to the integer millisecond nearest
+  // the pointer. Refuse any split within minEdge of either segment edge so a
+  // razor click never produces a sub-100ms sliver. Returns { left, right,
+  // splitMs } with cloned items allocated by time, or null when refused.
+  function splitSegmentAtTime(segment, timeMs, minEdge = MIN_CUE_MS) {
+    if (!segment) return null;
+    const start = Math.round(Number(segment.start));
+    const end = Math.round(Number(segment.end));
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < minEdge * 2) return null;
+    const target = Number.isFinite(Number(timeMs)) ? Number(timeMs) : (start + end) / 2;
+
+    const items = Array.isArray(segment.items) ? segment.items : [];
+    // Collect candidate item-boundary times (midpoint between adjacent items).
+    const boundaries = [];
+    for (let i = 1; i < items.length; i++) {
+      const prevEnd = Number(items[i - 1].end);
+      const nextStart = Number(items[i].start);
+      if (Number.isFinite(prevEnd) && Number.isFinite(nextStart)) {
+        boundaries.push(Math.round((prevEnd + nextStart) / 2));
+      }
+    }
+    let splitMs;
+    if (boundaries.length) {
+      splitMs = boundaries.reduce((best, value) => (
+        Math.abs(value - target) <= Math.abs(best - target) ? value : best
+      ), boundaries[0]);
+    } else {
+      splitMs = Math.round(target);
+    }
+    splitMs = clamp(splitMs, start + minEdge, end - minEdge);
+    if (splitMs <= start + minEdge - 1 || splitMs >= end - minEdge + 1) return null;
+
+    const leftItems = [];
+    const rightItems = [];
+    for (const item of items) {
+      const itemStart = Number(item.start);
+      const itemEnd = Number(item.end);
+      // An item straddling the split snaps to the side whose start is closer.
+      if (Number.isFinite(itemEnd) && itemEnd <= splitMs) {
+        leftItems.push({ ...item });
+      } else if (Number.isFinite(itemStart) && itemStart >= splitMs) {
+        rightItems.push({ ...item });
+      } else if (Number.isFinite(itemStart) && Number.isFinite(itemEnd)) {
+        if (splitMs - itemStart <= itemEnd - splitMs) {
+          leftItems.push({ ...item });
+        } else {
+          rightItems.push({ ...item });
+        }
+      } else {
+        leftItems.push({ ...item });
+      }
+    }
+
+    const clone = (base) => ({ ...base });
+    const left = clone(segment);
+    const right = clone(segment);
+    left.start = start;
+    left.end = splitMs;
+    right.start = splitMs;
+    right.end = end;
+    left.items = leftItems.length ? leftItems : null;
+    right.items = rightItems.length ? rightItems : null;
+    left._dirty = true;
+    right._dirty = true;
+    return { left, right, splitMs };
+  }
+
   function normalizeNewCueRange(start, end, duration, previousEnd = 0, nextStart = duration, minDuration = MIN_CUE_MS) {
     const lower = clamp(roundMs(previousEnd), 0, Math.max(0, duration));
     const upper = clamp(roundMs(nextStart), lower, Math.max(lower, duration));
@@ -485,7 +617,6 @@
       this.multiRange = [-1, -1];
       this.activeIndex = -1;
       this.drag = null;
-      this.createDrag = null;
       this.gapRangeDrag = null;
       this.gapBoundaryDrag = null;
       this.suppressGapClickUntil = 0;
@@ -494,6 +625,9 @@
       // Shift+滚轮调振幅的 rAF 节流：一帧内的滚动累加方向后只触发一次
       this.pendingScaleDirection = 0;
       this.scaleRafScheduled = false;
+      // 波形交互工具：'select'（默认，保留 Ctrl/Shift/分组多选与拖动）或
+      // 'razor'（左键点击字幕块即在指针位置安全拆分）。Alt 行为不随工具变化。
+      this.tool = 'select';
 
       this.workspace = document.getElementById('editor-workspace');
       this.panel = document.getElementById('current-cue-panel');
@@ -511,6 +645,9 @@
       this.waveformScaleDownButton = document.getElementById('waveform-scale-down');
       this.waveformScaleUpButton = document.getElementById('waveform-scale-up');
       this.secondsPerRowSelect = document.getElementById('waveform-seconds-per-row');
+      this.rowHeightSelect = document.getElementById('waveform-row-height');
+      this.showGroupBadgesToggle = document.getElementById('waveform-show-group-badges');
+      this.dragPlayheadToggle = document.getElementById('waveform-drag-playhead');
       this.sideSelect = document.getElementById('waveform-side');
       this.disabledDisplaySelect = document.getElementById('waveform-disabled-display');
       this.layoutPresetSelect = document.getElementById('layout-preset');
@@ -541,6 +678,15 @@
       document.querySelectorAll('[data-waveform-mode]').forEach((button) => {
         button.addEventListener('click', () => this.setMode(button.dataset.waveformMode));
       });
+      document.querySelectorAll('[data-waveform-tool]').forEach((button) => {
+        button.addEventListener('click', () => this.setTool(button.dataset.waveformTool));
+      });
+      // 初始工具按钮高亮（默认 select）
+      document.querySelectorAll('[data-waveform-tool]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.waveformTool === this.tool);
+      });
+      this.pane?.classList.toggle('tool-select', this.tool === 'select');
+      this.pane?.classList.toggle('tool-razor', this.tool === 'razor');
       document.getElementById('waveform-zoom-in').addEventListener('click', () => this.changeZoom(-1));
       document.getElementById('waveform-zoom-out').addEventListener('click', () => this.changeZoom(1));
       this.waveformScaleDownButton?.addEventListener('click', () => this.changeWaveformScale(-1));
@@ -551,6 +697,21 @@
         saveSettings(this.settings);
         this.multiRange = [-1, -1];
         this.render();
+      });
+      this.rowHeightSelect?.addEventListener('change', () => {
+        this.settings.rowHeight = Number(this.rowHeightSelect.value);
+        saveSettings(this.settings);
+        this.render();
+      });
+      this.showGroupBadgesToggle?.addEventListener('change', () => {
+        this.settings.showGroupBadges = this.showGroupBadgesToggle.checked;
+        saveSettings(this.settings);
+        this.render();
+      });
+      if (this.dragPlayheadToggle) this.dragPlayheadToggle.checked = this.settings.dragPlayhead === true;
+      this.dragPlayheadToggle?.addEventListener('change', () => {
+        this.settings.dragPlayhead = this.dragPlayheadToggle.checked;
+        saveSettings(this.settings);
       });
       this.sideSelect?.addEventListener('change', () => {
         this.settings.side = this.sideSelect.value === 'right' ? 'right' : 'left';
@@ -570,7 +731,7 @@
       this.scroll.addEventListener('scroll', (event) => {
         if (!this.isMultiMode()) return;
         if (event.isTrusted && !this.autoScrolling) this.manualFollowUntil = Date.now() + 3000;
-        this.renderMultiVisible();
+        this.scheduleMultiVisible();
       });
       this.bindDivider();
       this.bindLayoutResizers();
@@ -586,6 +747,7 @@
           dividerDrag = { pointerId: event.pointerId, snapshot: this.getLayoutHistorySnapshot(), changed: false };
           divider.classList.add('dragging');
           divider.setPointerCapture(event.pointerId);
+          this.layoutDragging = true;
         });
         divider.addEventListener('pointermove', (event) => {
           if (!dividerDrag || dividerDrag.pointerId !== event.pointerId) return;
@@ -609,9 +771,13 @@
         });
         const finish = (event) => {
           if (!dividerDrag || dividerDrag.pointerId !== event.pointerId) return;
+          const changed = dividerDrag.changed;
           dividerDrag = null;
           divider.classList.remove('dragging');
           try { divider.releasePointerCapture(event.pointerId); } catch (_) {}
+          this.layoutDragging = false;
+          // 松手后按最终尺寸做一次清晰重绘
+          if (changed) this.scheduleRender();
           saveSettings(this.settings);
         };
         divider.addEventListener('pointerup', finish);
@@ -630,6 +796,7 @@
           drag = { pointerId: event.pointerId, snapshot: this.getLayoutHistorySnapshot(), changed: false };
           resizer.classList.add('dragging');
           resizer.setPointerCapture?.(event.pointerId);
+          this.layoutDragging = true;
         });
         resizer.addEventListener('pointermove', (event) => {
           if (!drag || drag.pointerId !== event.pointerId) return;
@@ -665,9 +832,13 @@
         });
         const finish = (event) => {
           if (!drag || drag.pointerId !== event.pointerId) return;
+          const changed = drag.changed;
           drag = null;
           resizer.classList.remove('dragging');
           try { resizer.releasePointerCapture?.(event.pointerId); } catch (_) {}
+          this.layoutDragging = false;
+          // 松手后按最终尺寸做一次清晰重绘
+          if (changed) this.scheduleRender();
           saveSettings(this.settings);
         };
         resizer.addEventListener('pointerup', finish);
@@ -705,6 +876,7 @@
       this.windowLabel.textContent = `${this.settings.visibleSeconds} 秒`;
       if (this.waveformScaleLabel) this.waveformScaleLabel.textContent = `×${parseFloat(this.settings.waveformScale.toFixed(2))}`;
       this.secondsPerRowSelect.value = String(this.settings.secondsPerRow);
+      if (this.rowHeightSelect) this.rowHeightSelect.value = String(this.settings.rowHeight);
       if (this.sideSelect) this.sideSelect.value = this.settings.side;
       if (this.disabledDisplaySelect) this.disabledDisplaySelect.value = this.settings.disabledDisplay;
       if (this.layoutPresetSelect) this.layoutPresetSelect.value = this.settings.layout;
@@ -723,13 +895,16 @@
       document.getElementById('waveform-zoom-in').disabled = !basicMode;
       document.getElementById('waveform-zoom-out').disabled = !basicMode;
       this.secondsPerRowSelect.disabled = !multiMode;
+      if (this.rowHeightSelect) this.rowHeightSelect.disabled = !multiMode;
       if (this.waveformScaleDownButton) this.waveformScaleDownButton.disabled = !waveformVisible;
       if (this.waveformScaleUpButton) this.waveformScaleUpButton.disabled = !waveformVisible;
       // 「显示窗口」仅基础模式有意义；「每行长度」仅多行模式有意义；隐藏波形时两项都收起。
       const windowSetting = document.getElementById('waveform-window-setting');
       const secondsPerRowSetting = document.getElementById('waveform-seconds-per-row-setting');
+      const rowHeightSetting = document.getElementById('waveform-row-height-setting');
       if (windowSetting) windowSetting.hidden = !basicMode;
       if (secondsPerRowSetting) secondsPerRowSetting.hidden = !multiMode;
+      if (rowHeightSetting) rowHeightSetting.hidden = !multiMode;
     }
 
     setMode(mode) {
@@ -740,6 +915,25 @@
       if (mode === 'basic') this.centerBasicOnCurrentTime();
       if (this.isMultiMode()) this.multiRange = [-1, -1];
       this.render();
+    }
+
+    // 工具切换：'select' 为默认选择工具，保留全部 Ctrl/Shift/分组多选与
+    // 拖动行为；'razor' 让左键点击字幕块在指针位置安全拆分。切回 select
+    // 不会清除已有选中，便于拆分后立即继续操作。
+    setTool(tool) {
+      if (tool !== 'select' && tool !== 'razor') return;
+      if (this.tool === tool) return;
+      this.tool = tool;
+      this.pane?.classList.toggle('tool-razor', tool === 'razor');
+      this.pane?.classList.toggle('tool-select', tool === 'select');
+      document.querySelectorAll('[data-waveform-tool]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.waveformTool === tool);
+      });
+      this.setStatus(tool === 'razor' ? '分割工具：点击字幕块在指针位置拆分' : '选择工具');
+    }
+
+    getTool() {
+      return this.tool;
     }
 
     setLayout(layout) {
@@ -1170,12 +1364,12 @@
       }
       const rowDurationMs = this.settings.secondsPerRow * 1000;
       const rowIndex = clamp(Math.floor(timeMs / rowDurationMs), 0, Math.max(0, Math.ceil(this.durationMs / rowDurationMs) - 1));
-      const stride = ROW_HEIGHT + ROW_GAP;
-      const target = center
-        ? rowIndex * stride - Math.max(0, (this.scroll.clientHeight - ROW_HEIGHT) * 0.45)
+      const stride = this.settings.rowHeight + ROW_GAP;
+      const scrollTop = center
+        ? rowIndex * stride - Math.max(0, (this.scroll.clientHeight - this.settings.rowHeight) * 0.45)
         : rowIndex * stride;
       this.autoScrolling = true;
-      this.scroll.scrollTop = Math.max(0, target);
+      this.scroll.scrollTop = Math.max(0, scrollTop);
       this.manualFollowUntil = Date.now() + 3000;
       requestAnimationFrame(() => {
         this.autoScrolling = false;
@@ -1387,6 +1581,33 @@
       this.resizeFrame = requestAnimationFrame(() => this.render());
     }
 
+    scheduleMultiVisible() {
+      // 滚动事件一帧内可能触发多次；合并到每帧最多一次可视区渲染
+      if (this.multiVisibleFrame) return;
+      this.multiVisibleFrame = requestAnimationFrame(() => {
+        this.multiVisibleFrame = 0;
+        this.renderMultiVisible();
+      });
+    }
+
+    scheduleBasicRender() {
+      // 高频滚轮逐事件全绘单行波形会卡顿；合并到每帧最多一次
+      if (this.basicRenderFrame) return;
+      this.basicRenderFrame = requestAnimationFrame(() => {
+        this.basicRenderFrame = 0;
+        this.renderBasic();
+      });
+    }
+
+    scheduleRefreshCueBlocks() {
+      // 高回报率指针设备一帧内触发多次 pointermove；合并到每帧最多一次块重排
+      if (this.cueRefreshFrame) return;
+      this.cueRefreshFrame = requestAnimationFrame(() => {
+        this.cueRefreshFrame = 0;
+        this.refreshCueBlocks();
+      });
+    }
+
     render() {
       this.applyLayout();
       if (this.settings.mode === 'hidden') return;
@@ -1396,8 +1617,23 @@
         return;
       }
       this.empty.classList.add('hidden');
+      if (this.layoutDragging) {
+        // 布局拖拽中：不做全量重建（每帧 14 个 canvas 重绘会卡顿），
+        // 只把已有位图按新尺寸拉伸；松手后由 finish 里的 scheduleRender 恢复清晰
+        this.stretchWaveformCanvases();
+        return;
+      }
       if (this.settings.mode === 'basic') this.renderBasic();
       else this.renderMulti();
+    }
+
+    stretchWaveformCanvases() {
+      // 字幕块/空隙块/播放头均为百分比定位，会随行宽自动跟随；
+      // 只有 canvas 位图需要按新尺寸临时拉伸
+      this.content.querySelectorAll('.waveform-row canvas').forEach((canvas) => {
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+      });
     }
 
     renderSegments() {
@@ -1423,7 +1659,7 @@
     renderMulti() {
       const rowDurationMs = this.settings.secondsPerRow * 1000;
       const rowCount = Math.max(1, Math.ceil(this.durationMs / rowDurationMs));
-      this.content.style.height = `${rowCount * (ROW_HEIGHT + ROW_GAP) - ROW_GAP}px`;
+      this.content.style.height = `${rowCount * (this.settings.rowHeight + ROW_GAP) - ROW_GAP}px`;
       this.multiRange = [-1, -1];
       this.renderMultiVisible(true);
     }
@@ -1432,7 +1668,7 @@
       if (!this.isMultiMode() || !this.payload) return;
       const rowDurationMs = this.settings.secondsPerRow * 1000;
       const rowCount = Math.max(1, Math.ceil(this.durationMs / rowDurationMs));
-      const stride = ROW_HEIGHT + ROW_GAP;
+      const stride = this.settings.rowHeight + ROW_GAP;
       const first = clamp(Math.floor(this.scroll.scrollTop / stride) - 2, 0, rowCount - 1);
       const last = clamp(Math.ceil((this.scroll.scrollTop + this.scroll.clientHeight) / stride) + 2, 0, rowCount - 1);
       if (!force && first === this.multiRange[0] && last === this.multiRange[1]) {
@@ -1440,18 +1676,43 @@
         return;
       }
       this.multiRange = [first, last];
-      this.content.replaceChildren();
       this.content.style.height = `${rowCount * stride - ROW_GAP}px`;
-      for (let index = first; index <= last; index++) {
-        const startMs = index * rowDurationMs;
-        const endMs = Math.min(this.durationMs, startMs + rowDurationMs);
-        const row = this.createRow(startMs, endMs, index, false);
-        row.style.top = `${index * stride}px`;
-        row.style.height = `${ROW_HEIGHT}px`;
-        this.content.appendChild(row);
-        this.drawRow(row);
+      if (force) {
+        // 全量重建：先完成所有 DOM 变更再统一绘制，避免逐行强制同步布局
+        this.content.replaceChildren();
+        const rows = [];
+        for (let index = first; index <= last; index++) {
+          rows.push(this.content.appendChild(this.createMultiRow(index, rowDurationMs)));
+        }
+        for (const row of rows) this.drawRow(row);
+        this.updatePlayback(false);
+        return;
       }
+      // 增量更新：只移除滚出可视范围的行、只绘制新进入的行；
+      // 仍在范围内的行保留原 canvas 不重绘，消除滚动时的整体重建卡顿
+      const wanted = new Set();
+      for (let index = first; index <= last; index++) wanted.add(String(index));
+      const existing = new Set();
+      this.content.querySelectorAll('.waveform-row').forEach((row) => {
+        if (wanted.has(row.dataset.rowIndex)) existing.add(row.dataset.rowIndex);
+        else row.remove();
+      });
+      const created = [];
+      for (let index = first; index <= last; index++) {
+        if (existing.has(String(index))) continue;
+        created.push(this.content.appendChild(this.createMultiRow(index, rowDurationMs)));
+      }
+      for (const row of created) this.drawRow(row);
       this.updatePlayback(false);
+    }
+
+    createMultiRow(index, rowDurationMs) {
+      const startMs = index * rowDurationMs;
+      const endMs = Math.min(this.durationMs, startMs + rowDurationMs);
+      const row = this.createRow(startMs, endMs, index, false);
+      row.style.top = `${index * (this.settings.rowHeight + ROW_GAP)}px`;
+      row.style.height = `${this.settings.rowHeight}px`;
+      return row;
     }
 
     createRow(startMs, endMs, rowIndex, basic) {
@@ -1476,7 +1737,7 @@
       row.appendChild(playhead);
 
       const gaps = this.options.getGapRemoveGaps?.() || [];
-      const gapOperationMode = this.options.getGapOperationMode?.() || 'middle_drag';
+      const gapOperationMode = this.options.getGapOperationMode?.() || 'boundary_drag';
       gaps.forEach((gap, index) => {
         if (!gap || gap.end <= startMs || gap.start >= endMs) return;
         const block = document.createElement('div');
@@ -1539,6 +1800,7 @@
         block.addEventListener('contextmenu', (event) => {
           event.preventDefault();
           event.stopPropagation();
+          this.options.showGapContextMenu?.(event.clientX, event.clientY, index);
         });
         row.appendChild(block);
       });
@@ -1546,6 +1808,7 @@
       const segments = this.options.getSegments();
       const selected = this.options.getSelection();
       const now = this.currentTimeMs();
+      const groupBadges = computeGroupBadges(segments);
       segments.forEach((segment, index) => {
         if (segment.end <= startMs || segment.start >= endMs) return;
         if (segment.disabled && (this.options.getHideDisabled?.() || this.settings.disabledDisplay === 'hidden')) return;
@@ -1561,6 +1824,27 @@
         label.className = 'waveform-cue-label';
         label.textContent = segment.text.replace(/\s+/g, ' ');
         block.appendChild(label);
+        const badges = this.settings.showGroupBadges !== false ? groupBadges.get(index) : null;
+        if (badges?.length) {
+          // 徽章挂在行上、块上方（不遮挡块内文字）；单个表情包保留较小的显示阈值，
+          // 让它即使不是分组也能作为提示出现。
+          const badgeDuration = Math.max(1, endMs - startMs);
+          const badgeVisibleStart = Math.max(startMs, segment.start);
+          const badgeVisibleEnd = Math.min(endMs, segment.end);
+          // 行创建时还未挂载（clientWidth=0），用容器宽度估算块像素宽（行宽=容器宽）
+          const blockWidthPx = ((badgeVisibleEnd - badgeVisibleStart) / badgeDuration) * this.content.clientWidth;
+          const hasSingleSticker = badges.some((badge) => badge.type === 'sticker' && badge.total === 1);
+          if (blockWidthPx >= (hasSingleSticker ? 24 : 56)) badges.forEach((badge, badgeIndex) => {
+            const badgeEl = document.createElement('span');
+            badgeEl.className = `waveform-cue-badge ${badge.type}`;
+            badgeEl.textContent = badge.type === 'sticker' && badge.total === 1
+              ? '🦊'
+              : `${badge.type === 'color' ? '🎨' : '🦊'} ${badge.ordinal}/${badge.total}`;
+            badgeEl.style.left = `${((badgeVisibleStart - startMs) / badgeDuration) * 100}%`;
+            badgeEl.style.setProperty('--badge-stack-index', String(badgeIndex));
+            row.appendChild(badgeEl);
+          });
+        }
         if (segment.start >= startMs) {
           const leftHandle = document.createElement('span');
           leftHandle.className = 'waveform-cue-handle left';
@@ -1594,11 +1878,11 @@
         }
         if (event.button !== 0 || event.target.closest('.waveform-cue-block, .waveform-gap-block')) return;
         event.preventDefault();
-        if (event.ctrlKey || event.metaKey) {
-          this.beginCueCreate(event, row);
-          return;
-        }
+        // 普通左键点击空白波形：清除字幕选中并跳转播放头
+        this.options.clearSelection?.();
         this.seekFromPointer(event, row);
+        // 「允许拖动指针」开启时，继续按住左键拖动则指针跟随鼠标位置
+        if (this.settings.dragPlayhead) this.beginPlayheadDrag(event, row);
       });
       row.addEventListener('auxclick', (event) => {
         if (event.button === 1 && gapOperationMode === 'middle_drag') event.preventDefault();
@@ -1611,8 +1895,9 @@
       row.addEventListener('contextmenu', (event) => {
         if (event.target.closest('.waveform-cue-block, .waveform-gap-block')) return;
         event.preventDefault();
+        event.stopPropagation();
         const time = this.timeFromPointer(event, row);
-        this.options.addCueAtTime?.(time, event.clientX, event.clientY);
+        this.options.showBlankWaveformMenu?.(time, event.clientX, event.clientY);
       });
       return row;
     }
@@ -1649,6 +1934,13 @@
         block.classList.toggle('selected', this.options.getSelection().has(Number(block.dataset.idx)));
       });
       this.positionPlayheads();
+    }
+
+    refreshCueLabel(index) {
+      const segment = this.options.getSegments()[index];
+      if (!segment) return;
+      this.content.querySelectorAll(`.waveform-cue-block[data-idx="${index}"] .waveform-cue-label`)
+        .forEach((label) => { label.textContent = segment.text.replace(/\s+/g, ' '); });
     }
 
     updateSelection() {
@@ -1750,7 +2042,51 @@
       return startMs + ratio * (endMs - startMs);
     }
 
+    // 「允许拖动指针」：在波形空白区域按住左键拖动时，播放指针实时跟随鼠标
+    // 所在位置。高回报率指针事件用 rAF 合并，每帧最多 seek 一次；松开时以
+    // 最终位置再 seek 一次保证落点精确。指针捕获让拖出行范围时按行边界钳制。
+    beginPlayheadDrag(event, row) {
+      row.setPointerCapture?.(event.pointerId);
+      let frame = 0;
+      let lastEvent = null;
+      const flush = () => {
+        frame = 0;
+        if (lastEvent) this.seekFromPointer(lastEvent, row);
+        lastEvent = null;
+      };
+      const cleanup = () => {
+        window.removeEventListener('pointermove', onMove);
+        if (frame) { cancelAnimationFrame(frame); frame = 0; }
+        lastEvent = null;
+      };
+      const onMove = (moveEvent) => {
+        if (!(moveEvent.buttons & 1)) { cleanup(); return; }
+        lastEvent = moveEvent;
+        if (!frame) frame = requestAnimationFrame(flush);
+      };
+      const onUp = (upEvent) => {
+        cleanup();
+        this.seekFromPointer(upEvent, row);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp, { once: true });
+    }
+
     handleWheel(event) {
+      if (this.isMultiMode() && event.ctrlKey && event.shiftKey) {
+        // Ctrl+Shift+滚轮：仅多行模式下循环调整行高预设，向上滚放大，不改变时间映射
+        event.preventDefault();
+        const current = ROW_HEIGHT_PRESETS.indexOf(this.settings.rowHeight);
+        const next = clamp(current + (event.deltaY > 0 ? -1 : 1), 0, ROW_HEIGHT_PRESETS.length - 1);
+        if (next !== current) {
+          this.settings.rowHeight = ROW_HEIGHT_PRESETS[next];
+      if (this.rowHeightSelect) this.rowHeightSelect.value = String(this.settings.rowHeight);
+      if (this.showGroupBadgesToggle) this.showGroupBadgesToggle.checked = this.settings.showGroupBadges !== false;
+          saveSettings(this.settings);
+          this.renderMulti();
+        }
+        return;
+      }
       if (event.shiftKey && this.settings.mode !== 'hidden') {
         event.preventDefault();
         // 用 rAF 合并高频滚轮：一帧内累加方向，避免每次 wheel 都重渲染导致卡顿
@@ -1769,7 +2105,7 @@
         const delta = Math.sign(event.deltaY || event.deltaX) * windowMs * 0.12;
         this.basicWindowStartMs = clamp(this.basicWindowStartMs + delta, 0, maxStart);
         this.manualFollowUntil = Date.now() + 3000;
-        this.renderBasic();
+        this.scheduleBasicRender();
         return;
       }
       if (this.isMultiMode() && (event.ctrlKey || event.metaKey)) {
@@ -1789,11 +2125,41 @@
       if (event.button !== 0) return;
       event.preventDefault();
       event.stopPropagation();
+      // 剃刀工具：无修饰键左键点击字幕块（非手柄）时，在指针位置安全拆分。
+      // 修饰键（Alt/Ctrl/Cmd/Shift）仍走原行为，便于拆分后立即多选/禁用。
+      const targetHandle = event.target.closest('.waveform-cue-handle');
+      if (this.tool === 'razor' && !targetHandle
+          && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        const timeMs = this.timeFromPointer(event, row);
+        this.options.splitCueAtTime?.(index, timeMs);
+        return;
+      }
+      // Alt 行为分裂：命中共享边界手柄时拆开为单侧独立拖动；否则保持
+      // Alt+点击字幕块切换禁用的既有行为。
+      if (event.altKey && targetHandle) {
+        const sharedLeft = targetHandle.classList.contains('left')
+          && index > 0 && this.isSharedBoundary(event, index - 1, index, row);
+        const sharedRight = targetHandle.classList.contains('right')
+          && index + 1 < this.options.getSegments().length
+          && this.isSharedBoundary(event, index, index + 1, row);
+        if (sharedLeft || sharedRight) {
+          return this.beginIndependentEdgeDrag(event, index, row, targetHandle);
+        }
+      }
       if (event.altKey) {
         this.options.toggleDisabled?.([index]);
         return;
       }
-      const targetHandle = event.target.closest('.waveform-cue-handle');
+      // Ctrl/Cmd+click toggles selection without starting a drag
+      if (event.ctrlKey || event.metaKey) {
+        this.options.toggleCueSelection?.(index);
+        return;
+      }
+      // Shift+click selects a range from lastClickedIdx to index
+      if (event.shiftKey) {
+        this.options.selectCueRange?.(index);
+        return;
+      }
       let boundaryIndex = index;
       const kind = targetHandle?.classList.contains('left')
         ? (index > 0 && this.isSharedBoundary(event, index - 1, index, row)
@@ -1844,19 +2210,53 @@
       return Math.abs(pointerMs - left.end) <= SNAP_MS || Math.abs(pointerMs - right.start) <= SNAP_MS;
     }
 
-    beginCueCreate(event, row) {
+    // Alt-drag 命中共享边界手柄：只拖动被命中一侧，邻居的相反边保持不动。
+    // 默认（非 Alt）拖动共享边界会把两侧一起联动；本方法是该联动的独立拆开版本。
+    beginIndependentEdgeDrag(event, index, row, targetHandle) {
+      const segments = this.options.getSegments();
+      const isLeftHandle = targetHandle.classList.contains('left');
+      // left 手柄命中 index-1|index 共享边界 → 移动 index 段的 start；
+      // right 手柄命中 index|index+1 共享边界 → 移动 index 段的 end。
+      const movedIndex = isLeftHandle ? index : index;
+      const edge = isLeftHandle ? 'start' : 'end';
+      const dragIndex = isLeftHandle ? index - 1 : index; // 左侧段索引，用于 applyIndependentEdge
+      const originals = new Map([[movedIndex, {
+        start: segments[movedIndex].start,
+        end: segments[movedIndex].end,
+        items: Array.isArray(segments[movedIndex].items)
+          ? segments[movedIndex].items.map((item) => ({ ...item })) : segments[movedIndex].items,
+      }]]);
       const rect = row.getBoundingClientRect();
-      this.createDrag = {
+      this.drag = {
         pointerId: event.pointerId,
-        row,
         startClientX: event.clientX,
+        rangeMs: Number(row.dataset.endMs) - Number(row.dataset.startMs),
         rowWidth: Math.max(1, rect.width),
-        startMs: this.timeFromPointer(event, row),
+        kind: 'resize-boundary-independent',
+        index: movedIndex,
+        edge,
+        dragIndex,
+        indices: [movedIndex],
+        row,
+        originals,
+        started: false,
+        changed: false,
       };
-      row.setPointerCapture?.(event.pointerId);
-      window.addEventListener('pointermove', this._createMove = (moveEvent) => this.moveCueCreate(moveEvent));
-      window.addEventListener('pointerup', this._createEnd = (upEvent) => this.endCueCreate(upEvent), { once: true });
-      window.addEventListener('pointercancel', this._createEnd, { once: true });
+      event.currentTarget.classList.add('dragging');
+      window.addEventListener('pointermove', this._dragMove = (moveEvent) => this.moveCueDrag(moveEvent));
+      window.addEventListener('pointerup', this._dragEnd = (upEvent) => this.endCueDrag(upEvent), { once: true });
+      window.addEventListener('pointercancel', this._dragEnd, { once: true });
+    }
+
+    applyIndependentBoundaryDrag(drag, rawDelta) {
+      const segments = this.options.getSegments();
+      const original = drag.originals.get(drag.index);
+      if (!original) return;
+      const base = drag.edge === 'start' ? original.start : original.end;
+      const value = base + rawDelta;
+      applyIndependentEdge(segments, drag.dragIndex, drag.edge, value, MIN_CUE_MS);
+      const seg = segments[drag.index];
+      this.setStatus(`${drag.edge === 'start' ? '起点' : '终点'} ${formatCompact(drag.edge === 'start' ? seg.start : seg.end)}`);
     }
 
     beginGapBoundaryDrag(event, index, row, edge) {
@@ -1939,7 +2339,16 @@
       );
       drag.changed = JSON.stringify(drag.nextGaps) !== JSON.stringify(drag.originalGaps);
       drag.valueMs = valueMs;
-      this.previewGapBoundaryDrag(drag);
+      this.scheduleGapPreview(drag);
+    }
+
+    scheduleGapPreview(drag) {
+      // 与字幕块拖拽同理：合并到每帧最多一次预览重排
+      if (this.gapPreviewFrame) return;
+      this.gapPreviewFrame = requestAnimationFrame(() => {
+        this.gapPreviewFrame = 0;
+        if (this.gapBoundaryDrag === drag) this.previewGapBoundaryDrag(drag);
+      });
     }
 
     endGapBoundaryDrag(event) {
@@ -2018,31 +2427,6 @@
       this.options.applyGapRange?.(start, end, drag.removed);
     }
 
-    moveCueCreate(event) {
-      if (!this.createDrag || event.pointerId !== this.createDrag.pointerId) return;
-      event.preventDefault();
-      this.createDrag.endMs = this.timeFromPointer(event, this.createDrag.row);
-      this.setStatus(`新增 ${formatCompact(Math.min(this.createDrag.startMs, this.createDrag.endMs))} → ${formatCompact(Math.max(this.createDrag.startMs, this.createDrag.endMs))}`);
-    }
-
-    endCueCreate(event) {
-      const drag = this.createDrag;
-      if (!drag || event.pointerId !== drag.pointerId) return;
-      window.removeEventListener('pointermove', this._createMove);
-      window.removeEventListener('pointerup', this._createEnd);
-      window.removeEventListener('pointercancel', this._createEnd);
-      this.createDrag = null;
-      const endMs = drag.endMs ?? drag.startMs;
-      const start = Math.min(drag.startMs, endMs);
-      const finish = Math.max(drag.startMs, endMs);
-      if (finish - start >= MIN_CUE_MS) {
-        this.options.addCueRange?.(start, finish, event.clientX, event.clientY);
-      } else {
-        this.options.seek(drag.startMs / 1000);
-        this.updatePlayback();
-      }
-    }
-
     moveCueDrag(event) {
       const drag = this.drag;
       if (!drag || event.pointerId !== drag.pointerId) return;
@@ -2051,13 +2435,17 @@
       if (!drag.started && Math.abs(deltaMs) < 2) return;
       if (!drag.started) {
         drag.started = true;
-        this.options.onBeginEdit(drag.kind === 'move' ? '移动字幕时间' : '调整字幕边界');
+        const label = drag.kind === 'move' ? '移动字幕时间'
+          : drag.kind === 'resize-boundary-independent' ? '独立调整字幕边界'
+          : '调整字幕边界';
+        this.options.onBeginEdit(label);
       }
       if (drag.kind === 'move') this.applyMoveDrag(drag, deltaMs, event.altKey);
       else if (drag.kind === 'resize-boundary') this.applyBoundaryDrag(drag, deltaMs, event.altKey);
+      else if (drag.kind === 'resize-boundary-independent') this.applyIndependentBoundaryDrag(drag, deltaMs);
       else this.applyResizeDrag(drag, deltaMs, event.altKey);
       drag.changed = true;
-      this.refreshCueBlocks();
+      this.scheduleRefreshCueBlocks();
     }
 
     applyMoveDrag(drag, rawDelta, disableSnap) {
@@ -2181,7 +2569,8 @@
       this.content.querySelectorAll('.waveform-cue-block.dragging').forEach((block) => block.classList.remove('dragging'));
       this.drag = null;
       if (!drag.changed) {
-        this.seekFromPointer(event, drag.row);
+        // select-only 模式下点击字幕块只选中不跳转；select-and-seek 跳到点击位置
+        if (this.options.getClickBehavior?.() !== 'select-only') this.seekFromPointer(event, drag.row);
         return;
       }
       drag.indices.forEach((idx) => { this.options.getSegments()[idx]._dirty = true; });
@@ -2216,7 +2605,7 @@
         const rowIndex = Math.floor(now / (this.settings.secondsPerRow * 1000));
         if (rowIndex < this.multiRange[0] || rowIndex > this.multiRange[1]) {
           this.autoScrolling = true;
-          this.scroll.scrollTop = Math.max(0, rowIndex * (ROW_HEIGHT + ROW_GAP) - this.scroll.clientHeight * 0.35);
+          this.scroll.scrollTop = Math.max(0, rowIndex * (this.settings.rowHeight + ROW_GAP) - this.scroll.clientHeight * 0.35);
           requestAnimationFrame(() => { this.autoScrolling = false; });
           this.renderMultiVisible(true);
         }
@@ -2248,6 +2637,8 @@
       roundMs,
       sourceForFile,
       applySharedBoundary,
+      applyIndependentEdge,
+      splitSegmentAtTime,
       normalizeNewCueRange,
       clampWaveformScale,
       waveformScaleAfterStep,
@@ -2263,6 +2654,7 @@
       layoutDropIntent,
       layoutRootDropIntent,
       layoutDropPreviewRect,
+      computeGroupBadges,
     },
   };
 })();

@@ -8,6 +8,22 @@ const source = fs.readFileSync(new URL('../web/editor-utils.js', import.meta.url
 const context = { window: {} };
 vm.runInNewContext(source, context);
 const helpers = context.window.AsrEditorUtils;
+const i18nSource = fs.readFileSync(new URL('../web/editor-i18n.js', import.meta.url), 'utf8');
+const i18nContext = { window: {} };
+vm.runInNewContext(i18nSource, i18nContext);
+const i18n = i18nContext.window.MAWE_I18N;
+
+
+test('translates editor project controls and dynamic save messages to English', () => {
+  assert.equal(i18n.translateText('保存工程', 'en'), 'Save project');
+  assert.equal(i18n.translateText('自动打开上次工程', 'en'), 'Automatically open last project');
+  assert.equal(i18n.translateText('上次打开：demo.json', 'en'), 'Last opened: demo.json');
+  assert.equal(
+    i18n.translateText('已保存工程：demo.json（已备份为 demo.json.bak）', 'en'),
+    'Project saved: demo.json (backup: demo.json.bak)',
+  );
+  assert.equal(i18n.translateText('保存工程', 'zh'), '保存工程');
+});
 
 
 test('builds expandable replacement rows with before and after text', () => {
@@ -49,6 +65,11 @@ test('calculates current cue length and characters per second', () => {
   );
 });
 
+test('joins merged subtitle text with the configured separator', () => {
+  assert.equal(helpers.joinSegmentTexts([{ text: '第一句' }, { text: '第二句' }], '  '), '第一句  第二句');
+  assert.equal(helpers.joinSegmentTexts([{ text: '第一句' }, { text: '第二句' }], ''), '第一句第二句');
+});
+
 test('formats removed silence duration and media share for the summary', () => {
   assert.equal(helpers.formatHumanDuration(45_890), '45秒');
   assert.equal(helpers.formatHumanDuration(1_455_890), '24分15秒');
@@ -67,14 +88,93 @@ test('formats removed silence duration and media share for the summary', () => {
 
 test('finds previous and next visible cue for the current cue panel', () => {
   const segments = [
-    { disabled: false },
-    { disabled: true },
-    { disabled: false },
-    { disabled: false },
+    { start: 0, end: 999, disabled: false },
+    { start: 1000, end: 1999, disabled: true },
+    { start: 2000, end: 2999, disabled: false },
+    { start: 3000, end: 3999, disabled: false },
   ];
   assert.equal(helpers.findAdjacentCueIndex(segments, 2, -1, true), 0);
   assert.equal(helpers.findAdjacentCueIndex(segments, 0, 1, true), 2);
   assert.equal(helpers.findAdjacentCueIndex(segments, 2, 1, false), 3);
+});
+
+test('extends keyboard selection from its outer edge and skips hidden disabled cues', () => {
+  const segments = [
+    { start: 0, end: 999, disabled: false },
+    { start: 1000, end: 1999, disabled: true },
+    { start: 2000, end: 2999, disabled: false },
+    { start: 3000, end: 3999, disabled: false },
+  ];
+
+  assert.equal(
+    helpers.findCueSelectionExtensionTarget(segments, new Set([2]), 2, 0, -1, true),
+    0,
+  );
+  assert.equal(
+    helpers.findCueSelectionExtensionTarget(segments, new Set([0, 2]), 2, 0, 1, true),
+    3,
+  );
+  assert.equal(
+    helpers.findCueSelectionExtensionTarget(segments, new Set(), -1, 2500, 1, false),
+    3,
+  );
+});
+
+test('merge group inheritance keeps a common head or reference and rejects mixed groups', () => {
+  const segments = [
+    {
+      color: { name: 'red', value: '#e74c3c', start: 0, end: 3000 },
+    },
+    {
+      color_ref: { name: 'red', headIdx: 0 },
+    },
+    {
+      color_ref: { name: 'red', headIdx: 0 },
+    },
+    {
+      color: { name: 'blue', value: '#3498db', start: 3000, end: 4000 },
+    },
+  ];
+
+  const refsOnly = helpers.resolveMergedGroupInheritance(
+    segments, [1, 2], 'color', 'color_ref',
+  );
+  assert.equal(refsOnly.head, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(refsOnly.ref)), { name: 'red', headIdx: 0 });
+
+  const includingHead = helpers.resolveMergedGroupInheritance(
+    segments, [0, 1], 'color', 'color_ref',
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(includingHead.head)), segments[0].color);
+  assert.equal(includingHead.ref, null);
+  includingHead.head.name = 'changed';
+  assert.equal(segments[0].color.name, 'red', 'inherited head must be cloned');
+
+  const mixed = helpers.resolveMergedGroupInheritance(
+    segments, [2, 3], 'color', 'color_ref',
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(mixed)), {
+    head: null,
+    ref: null,
+    headIdx: null,
+  });
+});
+
+test('finds A/D navigation targets from selection or playhead', () => {
+  const segments = [
+    { start: 1000, end: 2000 },
+    { start: 2500, end: 3000, disabled: true },
+    { start: 3500, end: 4500 },
+    { start: 5000, end: 6000 },
+  ];
+
+  assert.equal(helpers.findCueNavigationTarget(segments, 2, 3500, -1, false), 1);
+  assert.equal(helpers.findCueNavigationTarget(segments, 2, 3500, -1, true), 0);
+  assert.equal(helpers.findCueNavigationTarget(segments, -1, 4000, -1, false), 1);
+  assert.equal(helpers.findCueNavigationTarget(segments, -1, 4000, -1, true), 0);
+  assert.equal(helpers.findCueNavigationTarget(segments, -1, 4000, 1, true), 3);
+  assert.equal(helpers.findCueNavigationTarget(segments, -1, 3200, -1, true), 0);
+  assert.equal(helpers.findCueNavigationTarget(segments, -1, 3200, 1, true), 2);
 });
 
 
@@ -87,6 +187,83 @@ test('aligns SRT export to the first enabled subtitle when requested', () => {
   assert.equal(helpers.getSrtExportOffset(segments, true), 2450);
   assert.equal(helpers.getSrtExportOffset(segments, false), 0);
   assert.equal(helpers.getSrtExportOffset([{ start: 500, disabled: true }], true), 0);
+});
+
+
+test('resolves referenced subtitle colors from their head when available', () => {
+  const segments = [
+    { color: { name: 'red' } },
+    { color_ref: { name: 'stale', headIdx: 0 } },
+    { color_ref: { name: 'blue', headIdx: 99 } },
+    {},
+  ];
+  assert.equal(helpers.effectiveColorName(segments[0], segments), 'red');
+  assert.equal(helpers.effectiveColorName(segments[1], segments), 'red');
+  assert.equal(helpers.effectiveColorName(segments[2], segments), 'blue');
+  assert.equal(helpers.effectiveColorName(segments[3], segments), null);
+});
+
+
+test('builds a color SRT on the shared full-export timeline and excludes disabled cues', () => {
+  const segments = [
+    { start: 500, end: 900, text: 'plain' },
+    { start: 1000, end: 1800, text: 'lead', color: { name: 'red' } },
+    { start: 2000, end: 2800, text: 'member', color_ref: { name: 'red', headIdx: 1 } },
+    { start: 3000, end: 3800, text: 'disabled', color_ref: { name: 'red', headIdx: 1 }, disabled: true },
+  ];
+  assert.equal(helpers.buildSrtPayload(segments, {
+    colorName: 'red',
+    timeOffset: 500,
+    formatTime: (timeMs) => `${timeMs}ms`,
+  }), [
+    '1',
+    '500ms --> 1300ms',
+    'lead',
+    '',
+    '2',
+    '1500ms --> 2300ms',
+    'member',
+    '',
+  ].join('\n'));
+});
+
+test('builds the default-color SRT from enabled subtitles without a color', () => {
+  const segments = [
+    { start: 0, end: 500, text: 'plain' },
+    { start: 500, end: 1000, text: 'red', color: { name: 'red' } },
+    { start: 1000, end: 1500, text: 'disabled plain', disabled: true },
+  ];
+  assert.equal(helpers.buildSrtPayload(segments, {
+    colorName: 'default',
+    formatTime: (timeMs) => `${timeMs}ms`,
+  }), ['1', '0ms --> 500ms', 'plain', ''].join('\n'));
+});
+
+test('builds plain text as enabled subtitle lines', () => {
+  assert.equal(helpers.buildPlainTextPayload([
+    { text: '第一行' },
+    { text: '第二行\n续行' },
+    { text: '不导出', disabled: true },
+  ]), '第一行\n第二行\n续行');
+});
+
+
+test('builds a gap-mapped color SRT with positive cue durations', () => {
+  const segments = [
+    { start: 1000, end: 1400, text: 'red', color: { name: 'red' } },
+    { start: 1500, end: 1600, text: 'blue', color: { name: 'blue' } },
+  ];
+  assert.equal(helpers.buildSrtPayload(segments, {
+    colorName: 'red',
+    mapTime: () => 500,
+    ensurePositiveDuration: true,
+    formatTime: (timeMs) => `${timeMs}ms`,
+  }), [
+    '1',
+    '500ms --> 501ms',
+    'red',
+    '',
+  ].join('\n'));
 });
 
 
@@ -329,4 +506,170 @@ test('shares configured Enter semantics between list editing and current cue edi
     helpers.configuredEnterAction({ key: 'Enter', shiftKey: true, ctrlKey: true }, 'enter'),
     'split',
   );
+});
+
+
+test('history stack: push clears redo and peek reports top without popping', () => {
+  const h = helpers.createHistoryStack(100);
+  assert.equal(h.canUndo(), false);
+  assert.equal(h.canRedo(), false);
+  assert.equal(h.peekUndo(), null);
+  h.push({ kind: 'segments', label: 'A', segs: [1] });
+  h.push({ kind: 'segments', label: 'B', segs: [2] });
+  assert.equal(h.undoLength(), 2);
+  assert.equal(h.canUndo(), true);
+  assert.deepEqual(h.peekUndo(), { kind: 'segments', label: 'B', segs: [2] });
+  assert.equal(h.undoLength(), 2); // peek 不消费
+});
+
+
+test('history stack: popUndo/popRedo round-trip restores records and mirrors current snapshots', () => {
+  const h = helpers.createHistoryStack(100);
+  h.push({ kind: 'segments', label: 'edit1', segs: ['after1'] });
+  h.push({ kind: 'segments', label: 'edit2', segs: ['after2'] });
+
+  // undo edit2: 当前状态 'after2' 进入 redo，返回 'edit2'（其 segs 是 edit2 之前的快照）
+  const undoRecord = h.popUndo({ kind: 'segments', label: 'edit2', segs: ['after2'] });
+  assert.deepEqual(undoRecord, { kind: 'segments', label: 'edit2', segs: ['after2'] });
+  assert.equal(h.undoLength(), 1);
+  assert.equal(h.redoLength(), 1);
+  assert.equal(h.canRedo(), true);
+
+  // redo edit2: 当前状态（刚还原的 'edit2' 之前状态）回到 undo，返回 redo 顶部 'after2'
+  const redoRecord = h.popRedo({ kind: 'segments', label: 'edit2', segs: ['before2'] });
+  assert.deepEqual(redoRecord, { kind: 'segments', label: 'edit2', segs: ['after2'] });
+  assert.equal(h.undoLength(), 2);
+  assert.equal(h.redoLength(), 0);
+});
+
+
+test('history stack: a new push after undo clears the redo stack', () => {
+  const h = helpers.createHistoryStack(100);
+  h.push({ kind: 'segments', label: 'A', segs: [1] });
+  h.popUndo({ kind: 'segments', label: 'A', segs: [1] });
+  assert.equal(h.redoLength(), 1);
+  h.push({ kind: 'segments', label: 'B', segs: [2] });
+  assert.equal(h.redoLength(), 0);
+  assert.equal(h.canRedo(), false);
+  assert.equal(h.undoLength(), 1);
+});
+
+
+test('history stack: limit trims oldest undo entries and clamps to at least 1', () => {
+  const h = helpers.createHistoryStack(3);
+  h.push({ label: 'a' });
+  h.push({ label: 'b' });
+  h.push({ label: 'c' });
+  h.push({ label: 'd' });
+  assert.equal(h.undoLength(), 3);
+  assert.equal(h.peekUndo().label, 'd');
+  // 最旧的 'a' 被裁掉
+  const first = h.popUndo({ label: 'cur' });
+  assert.equal(first.label, 'd');
+  const second = h.popUndo({ label: 'cur' });
+  assert.equal(second.label, 'c');
+  const third = h.popUndo({ label: 'cur' });
+  assert.equal(third.label, 'b');
+  assert.equal(h.canUndo(), false);
+  // undo 已空：popUndo 返回 null，不抛错；redo 仍持有 3 条镜像
+  assert.equal(h.popUndo({ label: 'x' }), null);
+  assert.equal(h.redoLength(), 3);
+  // 清空 redo 后 popRedo 才返回 null
+  h.clearRedo();
+  assert.equal(h.popRedo({ label: 'x' }), null);
+});
+
+
+test('history stack: clear and clearRedo reset the right stacks', () => {
+  const h = helpers.createHistoryStack(100);
+  h.push({ label: 'a' });
+  h.popUndo({ label: 'cur' });
+  h.push({ label: 'b' });
+  // undo=[b], redo=[] 已被 push 清空
+  assert.equal(h.redoLength(), 0);
+  h.popUndo({ label: 'cur' });
+  // undo=[], redo=[cur]
+  assert.equal(h.undoLength(), 0);
+  assert.equal(h.redoLength(), 1);
+  h.clearRedo();
+  assert.equal(h.redoLength(), 0);
+  h.push({ label: 'c' });
+  h.push({ label: 'd' });
+  h.clear();
+  assert.equal(h.undoLength(), 0);
+  assert.equal(h.redoLength(), 0);
+});
+
+
+// === preview.subtitle geometry helpers ===
+
+test('normalizePreviewGeometry returns default geometry for invalid input', () => {
+  const expected = { x: 0.175, y: 0.76, width: 0.65, height: 0.16 };
+  assert.deepEqual(JSON.parse(JSON.stringify(helpers.normalizePreviewGeometry(null))), expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(helpers.normalizePreviewGeometry('bad'))), expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(helpers.normalizePreviewGeometry({}))), expected);
+});
+
+test('normalizePreviewGeometry clamps out-of-range values to valid bounds', () => {
+  const geo = JSON.parse(JSON.stringify(helpers.normalizePreviewGeometry({ x: -0.5, y: 2, width: 0.1, height: 2 })));
+  assert.equal(geo.x, 0);
+  assert.equal(geo.width, helpers.PREVIEW_MIN_WIDTH); // 0.20
+  assert.equal(geo.height, 1);
+  // y was 2, but y + height must be <= 1, so y = 1 - height = 0
+  assert.equal(geo.y, 0);
+});
+
+test('clampPreviewGeometry enforces min-size and box-fits-inside-player', () => {
+  const clamped = JSON.parse(JSON.stringify(
+    helpers.clampPreviewGeometry({ x: 0.9, y: 0.9, width: 0.5, height: 0.5 }),
+  ));
+  assert.ok(clamped.x + clamped.width <= 1.0001, 'x + width <= 1');
+  assert.ok(clamped.y + clamped.height <= 1.0001, 'y + height <= 1');
+  assert.ok(clamped.width >= helpers.PREVIEW_MIN_WIDTH - 0.0001, 'width >= min');
+  assert.ok(clamped.height >= helpers.PREVIEW_MIN_HEIGHT - 0.0001, 'height >= min');
+  assert.ok(clamped.x >= 0 && clamped.y >= 0, 'x,y >= 0');
+});
+
+test('previewGeometryToCss converts normalized fractions to percentage strings', () => {
+  const css = helpers.previewGeometryToCss({ x: 0.5, y: 0.25, width: 0.4, height: 0.1 });
+  assert.equal(css.left, '50.0000%');
+  assert.equal(css.top, '25.0000%');
+  assert.equal(css.width, '40.0000%');
+  assert.equal(css.height, '10.0000%');
+});
+
+test('applyPreviewGeometryDelta moves the box and clamps to player bounds', () => {
+  const geo = { x: 0.4, y: 0.4, width: 0.3, height: 0.2 };
+  const moved = helpers.applyPreviewGeometryDelta(geo, 'move', 0.5, 0.5);
+  // 0.4 + 0.5 = 0.9, but x + width (0.3) must be <= 1 → x = 0.7
+  assert.ok(moved.x + moved.width <= 1.0001);
+  assert.ok(moved.y + moved.height <= 1.0001);
+  assert.ok(Math.abs(moved.width - 0.3) < 1e-9);
+  assert.ok(Math.abs(moved.height - 0.2) < 1e-9);
+});
+
+test('applyPreviewGeometryDelta resize-se grows width and height', () => {
+  const geo = { x: 0.1, y: 0.1, width: 0.3, height: 0.2 };
+  const resized = helpers.applyPreviewGeometryDelta(geo, 'se', 0.2, 0.1);
+  assert.ok(Math.abs(resized.x - 0.1) < 1e-9);
+  assert.ok(Math.abs(resized.y - 0.1) < 1e-9);
+  assert.ok(Math.abs(resized.width - 0.5) < 1e-9, `width ~0.5, got ${resized.width}`);
+  assert.ok(Math.abs(resized.height - 0.3) < 1e-9, `height ~0.3, got ${resized.height}`);
+});
+
+test('applyPreviewGeometryDelta resize-nw shrinks and enforces min-size', () => {
+  const geo = { x: 0.1, y: 0.1, width: 0.3, height: 0.2 };
+  // drag nw by (+0.4, +0.15) — tries to shrink width to -0.1, height to 0.05
+  const resized = helpers.applyPreviewGeometryDelta(geo, 'nw', 0.4, 0.15);
+  assert.ok(resized.width >= helpers.PREVIEW_MIN_WIDTH - 0.0001, 'width >= min');
+  assert.ok(resized.height >= helpers.PREVIEW_MIN_HEIGHT - 0.0001, 'height >= min');
+});
+
+test('applyPreviewGeometryDelta resize-w keeps right edge fixed at min-size', () => {
+  const geo = { x: 0.2, y: 0.2, width: 0.4, height: 0.2 };
+  // drag west handle right by 0.3 → width would be 0.1 < min 0.20
+  const resized = helpers.applyPreviewGeometryDelta(geo, 'w', 0.3, 0);
+  assert.ok(resized.width >= helpers.PREVIEW_MIN_WIDTH - 0.0001);
+  // right edge (x + width) should stay at original 0.2 + 0.4 = 0.6
+  assert.ok(Math.abs((resized.x + resized.width) - 0.6) < 0.001);
 });

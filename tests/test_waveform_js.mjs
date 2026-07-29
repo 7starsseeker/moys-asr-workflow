@@ -49,6 +49,35 @@ test('uses browser-compatible media signatures', () => {
 });
 
 
+test('keeps color and sticker group badges independent for overlapping groups', () => {
+  const badges = helpers.computeGroupBadges([
+    { color: { name: 'red' } },
+    { color_ref: { headIdx: 0 }, sticker: { name: 'haha' } },
+    { color_ref: { headIdx: 0 }, sticker_ref: { headIdx: 1 } },
+    { sticker_ref: { headIdx: 1 } },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(badges.get(1))), [
+    { type: 'color', ordinal: 2, total: 3 },
+    { type: 'sticker', ordinal: 1, total: 3 },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(badges.get(2))), [
+    { type: 'color', ordinal: 3, total: 3 },
+    { type: 'sticker', ordinal: 2, total: 3 },
+  ]);
+});
+
+test('shows a sticker badge even when the sticker has no group members', () => {
+  const badges = helpers.computeGroupBadges([
+    { sticker: { name: 'solo' } },
+    { color: { name: 'red' } },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(badges.get(0))), [
+    { type: 'sticker', ordinal: 1, total: 1 },
+  ]);
+  assert.equal(badges.has(1), false);
+});
+
+
 test('moves one shared boundary while preserving both cue durations', () => {
   const segments = [
     { start: 0, end: 1000 },
@@ -59,6 +88,74 @@ test('moves one shared boundary while preserving both cue durations', () => {
     { start: 0, end: 1300 },
     { start: 1300, end: 2200 },
   ]);
+});
+
+
+test('Alt-drag moves only the hit side of a shared boundary, leaving the neighbor untouched', () => {
+  // 共享边界在 1000：默认拖动会同时改左侧 end 和右侧 start；Alt 独立拖动只改被命中一侧。
+  const segments = [
+    { start: 0, end: 1000, items: [{ text: 'A', start: 0, end: 1000 }] },
+    { start: 1000, end: 2200, items: [{ text: 'B', start: 1000, end: 2200 }] },
+  ];
+  // 拖动右侧段的 start（左半段 end 不变）
+  helpers.applyIndependentEdge(segments, 0, 'start', 1500, 100);
+  assert.deepEqual(JSON.parse(JSON.stringify(segments)), [
+    { start: 0, end: 1000, items: [{ text: 'A', start: 0, end: 1000 }] },
+    { start: 1500, end: 2200, items: [{ text: 'B', start: 1500, end: 2200 }] },
+  ]);
+  // 拖动左侧段的 end（右侧段 start 不变）
+  helpers.applyIndependentEdge(segments, 0, 'end', 800, 100);
+  assert.deepEqual(JSON.parse(JSON.stringify(segments)), [
+    { start: 0, end: 800, items: [{ text: 'A', start: 0, end: 800 }] },
+    { start: 1500, end: 2200, items: [{ text: 'B', start: 1500, end: 2200 }] },
+  ]);
+});
+
+
+test('razor split snaps to the nearest item boundary and refuses 100ms edges', () => {
+  const segment = {
+    start: 1000, end: 5000, text: 'ABCD',
+    items: [
+      { text: 'A', start: 1000, end: 2000 },
+      { text: 'B', start: 2000, end: 3000 },
+      { text: 'C', start: 3000, end: 4000 },
+      { text: 'D', start: 4000, end: 5000 },
+    ],
+  };
+  // 指针在两个 item 边界正中时，选择后一个边界。
+  const splitMid = helpers.splitSegmentAtTime(segment, 2500);
+  assert.equal(splitMid.splitMs, 3000);
+  assert.deepEqual(JSON.parse(JSON.stringify(splitMid.left.items)), [
+    { text: 'A', start: 1000, end: 2000 },
+    { text: 'B', start: 2000, end: 3000 },
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(splitMid.right.items)), [
+    { text: 'C', start: 3000, end: 4000 },
+    { text: 'D', start: 4000, end: 5000 },
+  ]);
+  assert.equal(splitMid.left.end, 3000);
+  assert.equal(splitMid.right.start, 3000);
+  assert.equal(splitMid.left._dirty, true);
+  assert.equal(splitMid.right._dirty, true);
+
+  // 有 item 时间码时，边缘点击会吸附到最近的合法 item 边界。
+  const splitEdge = helpers.splitSegmentAtTime(segment, 1050);
+  assert.equal(splitEdge.splitMs, 2000);
+
+  // 过短段（< 200ms）直接拒绝
+  const tooShort = { start: 0, end: 150, text: 'X', items: [] };
+  assert.equal(helpers.splitSegmentAtTime(tooShort, 75), null);
+});
+
+
+test('razor split without items falls back to the integer millisecond nearest the pointer', () => {
+  const segment = { start: 1000, end: 4000, text: 'hello', items: [] };
+  const split = helpers.splitSegmentAtTime(segment, 2300);
+  assert.equal(split.splitMs, 2300);
+  assert.equal(split.left.end, 2300);
+  assert.equal(split.right.start, 2300);
+  assert.equal(split.left.items, null);
+  assert.equal(split.right.items, null);
 });
 
 
@@ -109,6 +206,12 @@ test('normalizes independent layout data and preserves the right-column preset',
   assert.deepEqual(normalized.rows, [45, 25, 30]);
   assert.deepEqual(normalized.freeOrder, ['player', 'panel', 'cues', 'wave']);
   assert.equal(normalized.tree.type, 'split');
+});
+
+
+test('defaults the right-column layout to a wider waveform pane', () => {
+  const normalized = helpers.normalizeLayoutData({ preset: 'wave-right' });
+  assert.equal(normalized.columnPercent, 44);
 });
 
 

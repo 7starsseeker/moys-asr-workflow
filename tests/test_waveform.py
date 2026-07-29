@@ -1,7 +1,8 @@
+# pyright: reportAny=false, reportImplicitOverride=false, reportImplicitStringConcatenation=false, reportUnannotatedClassAttribute=false, reportUninitializedInstanceVariable=false, reportUnknownArgumentType=false, reportUnknownVariableType=false, reportUnusedCallResult=false, reportUnusedImport=false
+
 from __future__ import annotations
 
 import math
-import json
 import shutil
 import struct
 import sys
@@ -93,6 +94,33 @@ class WaveformExtractionTests(unittest.TestCase):
         self.assertEqual(cached, payload)
         self.assertFalse(extracted)
 
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
+    def test_embed_waveform_adds_valid_payload_without_sidecar(self) -> None:
+        project = {"segments": []}
+
+        result = waveform_module.embed_waveform(project, self.media_path)
+
+        self.assertIs(result.error, None)
+        self.assertEqual(project, {"segments": []})
+        embedded = result.project["waveform"]
+        self.assertTrue(waveform_module.is_waveform_payload(embedded))
+        self.assertTrue(waveform_module.waveform_matches_media(embedded, self.media_path))
+        self.assertEqual(embedded["encoding"], waveform_module.WAVEFORM_ENCODING)
+        self.assertGreater(embedded["peak_count"], 0)
+        self.assertEqual(embedded["source"], waveform_module.media_signature(self.media_path))
+        self.assertFalse(waveform_module.waveform_sidecar_path(self.media_path).exists())
+
+    def test_embed_waveform_leaves_project_unchanged_when_extraction_fails(self) -> None:
+        project = {"segments": [], "waveform": {"stale": True}}
+        bad_media = Path(self.temp_dir.name) / "notes.txt"
+        bad_media.write_text("not audio", encoding="utf-8")
+
+        result = waveform_module.embed_waveform(project, bad_media)
+
+        self.assertIsNotNone(result.error)
+        self.assertIs(result.project, project)
+        self.assertEqual(project, {"segments": [], "waveform": {"stale": True}})
+
 
 class EditorAssetTests(unittest.TestCase):
     def test_blank_editor_inlines_modular_assets(self) -> None:
@@ -122,6 +150,18 @@ class EditorAssetTests(unittest.TestCase):
         self.assertIn('加载工程后显示字幕列表', page)
         self.assertIn('id="layout-preset"', page)
         self.assertIn('id="layout-reset"', page)
+        self.assertIn('class="toolbar-utility-group" role="group" aria-label="编辑器工具"', page)
+        self.assertIn('data-waveform-tool="select"', page)
+        self.assertIn('data-waveform-tool="razor"', page)
+        self.assertIn('<span>分割</span>', page)
+        # 帮助按钮改用 🤔 文本图标后，SVG 工具图标只剩选择/分割两个
+        self.assertEqual(page.count('class="toolbar-button-icon"'), 2)
+        self.assertIn('.waveform-cue-block.selected {', page)
+        # 选中字幕块只用 outline + 阴影高亮，不再改 border-color
+        self.assertIn('outline: 2px solid #ffd54a;', page)
+        # 单行模式徽章位置跟随块高公式，避免嵌进更高的块内
+        self.assertIn('.waveform-basic .waveform-cue-badge {', page)
+        self.assertIn('bottom: calc(9px + max(35px, min(72px, 40%))', page)
         self.assertIn('id="layout-drop-preview"', page)
         self.assertIn('layout-insert-preview', page)
         self.assertIn('insertLayoutModuleAtEdge', page)
@@ -137,6 +177,14 @@ class EditorAssetTests(unittest.TestCase):
         self.assertIn('const SERVER_CONFIG = null;', page)
         self.assertIn('id="editor-settings-toggle"', page)
         self.assertIn('id="editor-settings-panel"', page)
+        self.assertIn('<span class="editor-settings-title">通用操作</span>', page)
+        self.assertIn('字幕（编辑状态下）拆分按键', page)
+        self.assertNotIn('波形区拆分按键', page)
+        self.assertEqual(page.count('class="editor-settings-item editor-settings-list-fields editor-settings-display-row"'), 2)
+        self.assertIn('id="help-split-key"', page)
+        self.assertIn('id="help-waveform-split-key"', page)
+        self.assertNotIn('确定删除第 ${idx + 1} 条字幕', page)
+        self.assertNotIn('确定删除选中的 ${targetIdxs.length} 条字幕', page)
         self.assertIn('id="export-start-at-zero"', page)
         for field in ('index', 'time', 'charcount'):
             self.assertIn(f'id="cue-list-show-{field}" checked', page)
@@ -148,19 +196,42 @@ class EditorAssetTests(unittest.TestCase):
         self.assertIn('cueListShowTime: saved.cueListShowTime !== false', page)
         self.assertIn('cueListShowSticker: saved.cueListShowSticker === true', page)
         self.assertIn('cueListShowCharcount: saved.cueListShowCharcount !== false', page)
-        self.assertIn('id="cue-editor-show-navigation" checked', page)
+        self.assertNotIn('id="cue-editor-show-navigation" checked', page)
         self.assertIn('id="cue-editor-show-sticker"> 表情包', page)
-        self.assertIn('cueEditorShowNavigation: saved.cueEditorShowNavigation !== false', page)
+        self.assertIn('cueEditorShowNavigation: saved.cueEditorShowNavigation === true', page)
         self.assertIn('cueEditorShowSticker: saved.cueEditorShowSticker === true', page)
         self.assertIn("cuePanel.classList.toggle('hide-cue-editor-navigation'", page)
         self.assertIn("cuePanel.classList.toggle('hide-cue-editor-sticker'", page)
+        self.assertIn('class="toolbar main-toolbar"', page)
+        self.assertIn('class="toolbar player-toolbar"', page)
+        self.assertIn('class="toolbar cue-list-toolbar"', page)
+        self.assertIn('class="toolbar waveform-toolbar"', page)
+        self.assertNotIn('class="toolbar row-subtitle"', page)
+        self.assertNotIn('class="toolbar row-waveform"', page)
+        self.assertIn('class="player-stage"', page)
+        self.assertIn('id="overlay-toggle" checked> 预览字幕', page)
+        self.assertIn('id="sticker-overlay-toggle"> 预览表情包', page)
+        self.assertIn('id="merge-join-text"', page)
+        self.assertIn('id="waveform-drag-playhead"', page)
+        self.assertIn('播放时跳过空隙', page)
+        self.assertIn('const projectHasStickers = DATA.segments.some(segment => segment.sticker || segment.sticker_ref);', page)
+        self.assertIn('!EDITOR_SETTINGS.cueListShowSticker || !projectHasStickers,', page)
+        self.assertIn('DATA.segments.forEach((seg, i) => container.appendChild(buildCueEl(seg, i)));\n  applyCueListDisplaySettings();', page)
         self.assertIn("cuePanelText?.addEventListener('keydown'", page)
         self.assertIn('const action = getConfiguredEnterAction(event);', page)
         self.assertIn("if (action === 'split') splitCuePanelAtCursor();", page)
         self.assertIn('if (e.target === cuePanelText) return;', page)
         self.assertIn('.cue .sticker-slot {\n    flex: 0 1 80px; min-width: 40px;', page)
         self.assertIn('.cue .time {\n    font-size: 11px;', page)
-        self.assertIn('min-width: 40px; max-width: 100px; padding-top: 1px; flex: 0 3 100px;', page)
+        # 时间码列由字幕列表容器统一切换：宽时单行，窄于 700px 时所有行一起变成两行。
+        self.assertIn('container: cue-list / inline-size;', page)
+        self.assertIn('grid-template-areas: "start arrow end";', page)
+        self.assertIn('width: 24ch; padding-top: 1px; flex: 0 0 24ch;', page)
+        self.assertIn('@container cue-list (max-width: 700px)', page)
+        self.assertIn('"start arrow"\n        "end end";', page)
+        self.assertIn("timeStartEl.className = 'time-start';", page)
+        self.assertIn("timeArrowEl.className = 'time-arrow';", page)
+        self.assertIn("timeEndEl.className = 'time-end';", page)
         self.assertIn('overflow: hidden; text-overflow: ellipsis; white-space: nowrap;', page)
         self.assertIn('id="gap-remove-manage"', page)
         self.assertIn('id="gap-remove-panel"', page)
@@ -175,14 +246,25 @@ class EditorAssetTests(unittest.TestCase):
         self.assertIn('id="gap-skip-playback" checked', page)
         self.assertIn('id="gap-remove-hysteresis" min="0" max="30" step="0.5" value="2"', page)
         self.assertIn('id="gap-remove-operation-mode"', page)
-        self.assertIn('<option value="middle_drag" selected>中键拖动</option>', page)
-        self.assertIn('class="gap-remove-operation-section"', page)
+        self.assertIn('<option value="boundary_drag" selected>拖动边界</option>', page)
+        # 空隙操作已从「移除静音空隙」弹窗移到「设置/波形」分组
+        self.assertNotIn('class="gap-remove-operation-section"', page)
+        self.assertIn('空隙区段操作方式\n      <select id="gap-remove-operation-mode">', page)
+        self.assertIn('id="gap-remove-clear-all" class="danger">全部清理</button>', page)
+        self.assertIn('确定要清理全部 ${state.gaps.length} 个空隙区段吗？', page)
+        self.assertIn("message.className = 'gap-remove-total';", page)
         self.assertIn('class="gap-remove-parameters-heading"', page)
         self.assertIn('id="gap-removed-export-dropdown" hidden', page)
         self.assertIn('id="gap-removed-export-btn"', page)
         self.assertIn('导出去空隙版本', page)
+        self.assertIn('id="subtitle-export-dropdown" hidden', page)
+        self.assertIn('id="download-full-srt"', page)
+        self.assertIn('id="download-color-srt"', page)
+        self.assertIn('id="download-plain-text"', page)
         self.assertIn('id="download-gap-removed-srt"', page)
+        self.assertIn('id="download-gap-removed-color-srt"', page)
         self.assertIn('id="download-gap-removed-otio"', page)
+        self.assertIn('>时间线 OTIO 工程</div>', page)
         self.assertIn('id="download-gap-removed-ffconcat"', page)
         self.assertIn('id="download-gap-removed-regions-json"', page)
         self.assertNotIn('gap-remove-subtitle-warning', page)
@@ -194,6 +276,9 @@ class EditorAssetTests(unittest.TestCase):
         self.assertIn("schema: 'moy.asr.gap_removed_keep_regions.v1'", page)
         self.assertIn('waveform-gap-block', page)
         self.assertIn('waveform-gap-handle', page)
+        self.assertIn('showGapContextMenu?.(event.clientX, event.clientY, index)', page)
+        self.assertIn("gap.removed === false ? '移除区段' : '恢复区段'", page)
+        self.assertIn("addItem('清理该区段', () => clearGap(index), { danger: true });", page)
         self.assertIn('id="waveform-pane" aria-label="音频波形" tabindex="-1"', page)
         self.assertIn("this.pane.addEventListener('pointerdown', () => this.focusWaveform());", page)
         self.assertIn('id="project-media-modal"', page)
@@ -243,7 +328,7 @@ class EditorAssetTests(unittest.TestCase):
             ROOT / "edit.py",
             ROOT / "waveform.py",
             ROOT / "server-editor" / "serve.py",
-            *sorted((ROOT / "web").glob("*")),
+            *(path for path in sorted((ROOT / "web").glob("*")) if path.is_file()),
         ]:
             content = path.read_bytes()
             self.assertNotIn(b"\r\n", content, path.name)

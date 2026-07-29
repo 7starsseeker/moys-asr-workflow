@@ -52,6 +52,10 @@
     return { totalLength, charsPerSecond };
   }
 
+  function joinSegmentTexts(segments, separator) {
+    return segments.map((segment) => String(segment?.text || '')).join(separator);
+  }
+
   function formatHumanDuration(durationMs) {
     const totalSeconds = Math.max(0, Math.floor(Number(durationMs) / 1000) || 0);
     const seconds = totalSeconds % 60;
@@ -142,12 +146,158 @@
     return -1;
   }
 
+  function findCueNavigationTarget(segments, currentIndex, timeMs, direction, skipDisabled = false) {
+    if (!Array.isArray(segments) || !segments.length || (direction !== -1 && direction !== 1)) return -1;
+    if (Number.isInteger(currentIndex) && currentIndex >= 0 && currentIndex < segments.length) {
+      return findAdjacentCueIndex(segments, currentIndex, direction, skipDisabled);
+    }
+
+    const time = Number(timeMs);
+    if (!Number.isFinite(time)) return -1;
+    const activeIndex = segments.findIndex((segment) => (
+      segment && Number(segment.start) <= time && Number(segment.end) >= time
+    ));
+    if (activeIndex >= 0) {
+      return findAdjacentCueIndex(segments, activeIndex, direction, skipDisabled);
+    }
+
+    if (direction < 0) {
+      for (let index = segments.length - 1; index >= 0; index -= 1) {
+        if (Number(segments[index]?.start) >= time) continue;
+        if (!skipDisabled || !segments[index]?.disabled) return index;
+      }
+      return -1;
+    }
+    for (let index = 0; index < segments.length; index += 1) {
+      if (Number(segments[index]?.start) <= time) continue;
+      if (!skipDisabled || !segments[index]?.disabled) return index;
+    }
+    return -1;
+  }
+
+  function findCueSelectionExtensionTarget(
+    segments,
+    selectedIndexes,
+    currentIndex,
+    timeMs,
+    direction,
+    skipDisabled = false,
+  ) {
+    if (!Array.isArray(segments) || !segments.length || (direction !== -1 && direction !== 1)) return -1;
+    const selected = Array.from(selectedIndexes || [])
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < segments.length);
+    if (!selected.length) {
+      return findCueNavigationTarget(
+        segments,
+        currentIndex,
+        timeMs,
+        direction,
+        skipDisabled,
+      );
+    }
+    const edge = direction < 0 ? Math.min(...selected) : Math.max(...selected);
+    return findAdjacentCueIndex(segments, edge, direction, skipDisabled);
+  }
+
+  function cloneJsonValue(value) {
+    return value == null ? null : JSON.parse(JSON.stringify(value));
+  }
+
+  // 合并选区只有在每条字幕都指向同一个有效 group head 时才继承该 group。
+  // 若选区包含 head，新字幕继续作为 head；若选区只是同组 refs，则继续指向原 head。
+  function resolveMergedGroupInheritance(segments, indexes, headField, refField) {
+    if (!Array.isArray(segments) || !Array.isArray(indexes) || !indexes.length) {
+      return { head: null, ref: null, headIdx: null };
+    }
+    const headIndexes = indexes.map((index) => {
+      const segment = segments[index];
+      if (!segment) return null;
+      if (segment[headField]) return index;
+      const headIdx = segment[refField]?.headIdx;
+      return Number.isInteger(headIdx) && segments[headIdx]?.[headField] ? headIdx : null;
+    });
+    const commonHeadIdx = headIndexes[0];
+    if (
+      !Number.isInteger(commonHeadIdx)
+      || headIndexes.some((headIdx) => headIdx !== commonHeadIdx)
+    ) {
+      return { head: null, ref: null, headIdx: null };
+    }
+
+    const head = segments[commonHeadIdx][headField];
+    if (indexes.includes(commonHeadIdx)) {
+      return {
+        head: cloneJsonValue(head),
+        ref: null,
+        headIdx: commonHeadIdx,
+      };
+    }
+
+    const sourceRef = indexes
+      .map((index) => segments[index]?.[refField])
+      .find((ref) => ref && ref.headIdx === commonHeadIdx);
+    const inheritedRef = cloneJsonValue(sourceRef) || {};
+    inheritedRef.headIdx = commonHeadIdx;
+    if (!inheritedRef.name && head?.name) inheritedRef.name = head.name;
+    return {
+      head: null,
+      ref: inheritedRef,
+      headIdx: commonHeadIdx,
+    };
+  }
+
   function getSrtExportOffset(segments, alignFirstEnabled = true) {
     if (!alignFirstEnabled || !Array.isArray(segments)) return 0;
     const firstEnabled = segments.find((segment) => (
       segment && !segment.disabled && Number.isFinite(Number(segment.start))
     ));
     return firstEnabled ? Math.max(0, Math.round(Number(firstEnabled.start))) : 0;
+  }
+
+  function effectiveColorName(segment, segments) {
+    const direct = segment?.color?.name;
+    if (typeof direct === 'string' && direct) return direct;
+    const reference = segment?.color_ref;
+    const headName = Number.isInteger(reference?.headIdx)
+      ? segments?.[reference.headIdx]?.color?.name
+      : null;
+    if (typeof headName === 'string' && headName) return headName;
+    return typeof reference?.name === 'string' && reference.name ? reference.name : null;
+  }
+
+  function buildSrtPayload(segments, options = {}) {
+    const source = Array.isArray(segments) ? segments : [];
+    const colorName = typeof options.colorName === 'string' ? options.colorName : null;
+    const timeOffset = Math.max(0, Math.round(Number(options.timeOffset)) || 0);
+    const mapTime = typeof options.mapTime === 'function'
+      ? options.mapTime
+      : (timeMs) => Math.max(0, Math.round(Number(timeMs) || 0) - timeOffset);
+    const formatTime = typeof options.formatTime === 'function'
+      ? options.formatTime
+      : (timeMs) => String(timeMs);
+    const parts = [];
+    source.filter((segment) => {
+      if (!segment || segment.disabled) return false;
+      if (!colorName) return true;
+      const effectiveName = effectiveColorName(segment, source);
+      return colorName === 'default' ? !effectiveName : effectiveName === colorName;
+    }).forEach((segment, index) => {
+      const start = Math.max(0, Math.round(Number(mapTime(segment.start)) || 0));
+      const mappedEnd = Math.max(0, Math.round(Number(mapTime(segment.end)) || 0));
+      const end = options.ensurePositiveDuration ? Math.max(start + 1, mappedEnd) : mappedEnd;
+      parts.push(String(index + 1));
+      parts.push(`${formatTime(start)} --> ${formatTime(end)}`);
+      parts.push(String(segment.text || ''));
+      parts.push('');
+    });
+    return parts.join('\n');
+  }
+
+  function buildPlainTextPayload(segments) {
+    return (Array.isArray(segments) ? segments : [])
+      .filter((segment) => segment && !segment.disabled)
+      .map((segment) => String(segment.text || '').replace(/\r\n?/g, '\n'))
+      .join('\n');
   }
 
   function fileBasename(value) {
@@ -422,14 +572,162 @@
     return splitKey === 'enter' ? 'split' : 'save';
   }
 
+  // === 字幕预览几何（preview.subtitle）===
+  // preview.subtitle 以 player-wrap 归一化分数存储 {x, y, width, height}。
+  // 这些纯函数不触碰 DOM，可在 node:test 下直接验证。
+  const PREVIEW_MIN_WIDTH = 0.20;
+  const PREVIEW_MIN_HEIGHT = 0.08;
+  const DEFAULT_PREVIEW_GEOMETRY = Object.freeze({
+    x: 0.175, y: 0.76, width: 0.65, height: 0.16,
+  });
+  // 复刻原 CSS bottom:8% 的带状：y=0.76, height=0.16 → 76%→92%，留 8% 底边距；宽度默认 65% 居中。
+  // 表情包预览的默认几何：右上角小图。
+  const DEFAULT_STICKER_GEOMETRY = Object.freeze({
+    x: 0.73, y: 0.04, width: 0.24, height: 0.3,
+  });
+
+  function clampNumber(value, fallback) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  // 把任意输入归一化为合法 geometry；非法字段回退到指定默认值。
+  function normalizePreviewGeometry(value, defaults = DEFAULT_PREVIEW_GEOMETRY) {
+    if (!value || typeof value !== 'object') return { ...defaults };
+    const geo = {
+      x: clampNumber(value.x, defaults.x),
+      y: clampNumber(value.y, defaults.y),
+      width: clampNumber(value.width, defaults.width),
+      height: clampNumber(value.height, defaults.height),
+    };
+    return clampPreviewGeometry(geo);
+  }
+
+  // 把 geometry 钳制到 [0,1] + min-size + 盒子不超出播放区。
+  function clampPreviewGeometry(geo) {
+    const width = Math.min(1, Math.max(PREVIEW_MIN_WIDTH, Number(geo.width) || 0));
+    const height = Math.min(1, Math.max(PREVIEW_MIN_HEIGHT, Number(geo.height) || 0));
+    const x = Math.min(1 - width, Math.max(0, Number(geo.x) || 0));
+    const y = Math.min(1 - height, Math.max(0, Number(geo.y) || 0));
+    return { x, y, width, height };
+  }
+
+  // geometry -> CSS 百分比样式（left/top/width/height）。
+  function previewGeometryToCss(geo) {
+    const clamped = clampPreviewGeometry(geo);
+    return {
+      left: `${(clamped.x * 100).toFixed(4)}%`,
+      top: `${(clamped.y * 100).toFixed(4)}%`,
+      width: `${(clamped.width * 100).toFixed(4)}%`,
+      height: `${(clamped.height * 100).toFixed(4)}%`,
+    };
+  }
+
+  // 根据手柄方向和归一化增量 (dx, dy) 计算新的 geometry。
+  // handle: 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
+  // 增量已是 player-wrap 归一化分数（调用方用 dx/wrapWidth 算好）。
+  function applyPreviewGeometryDelta(geo, handle, dx, dy) {
+    const clamped = clampPreviewGeometry(geo);
+    const dxN = Number(dx) || 0;
+    const dyN = Number(dy) || 0;
+    if (handle === 'move') {
+      return clampPreviewGeometry({
+        x: clamped.x + dxN,
+        y: clamped.y + dyN,
+        width: clamped.width,
+        height: clamped.height,
+      });
+    }
+    // 以四条边计算，保证 min-size 后再钳制到播放区内。
+    let left = clamped.x;
+    let top = clamped.y;
+    let right = clamped.x + clamped.width;
+    let bottom = clamped.y + clamped.height;
+    if (handle.includes('w')) left = clamped.x + dxN;
+    if (handle.includes('e')) right = clamped.x + clamped.width + dxN;
+    if (handle.includes('n')) top = clamped.y + dyN;
+    if (handle.includes('s')) bottom = clamped.y + clamped.height + dyN;
+    // min-size：若某边缩过最小值，以对边为锚回弹。
+    if (right - left < PREVIEW_MIN_WIDTH) {
+      if (handle.includes('w')) left = right - PREVIEW_MIN_WIDTH;
+      else right = left + PREVIEW_MIN_WIDTH;
+    }
+    if (bottom - top < PREVIEW_MIN_HEIGHT) {
+      if (handle.includes('n')) top = bottom - PREVIEW_MIN_HEIGHT;
+      else bottom = top + PREVIEW_MIN_HEIGHT;
+    }
+    // 钳制到播放区 [0,1]。
+    left = Math.max(0, left);
+    top = Math.max(0, top);
+    right = Math.min(1, right);
+    bottom = Math.min(1, bottom);
+    // 钳制后再保证 min-size（播放区不够大时优先贴边）。
+    if (right - left < PREVIEW_MIN_WIDTH) right = Math.min(1, left + PREVIEW_MIN_WIDTH);
+    if (bottom - top < PREVIEW_MIN_HEIGHT) bottom = Math.min(1, top + PREVIEW_MIN_HEIGHT);
+    return clampPreviewGeometry({
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top,
+    });
+  }
+
+  // 统一撤销/重做栈：管理两个不透明记录数组。
+  // - push(record)：压入 undo 栈，清空 redo 栈，按 limit 裁剪。
+  // - popUndo(currentSnapshot)：从 undo 弹出一条记录，把当前快照压入 redo，
+  //   返回被弹出的记录供调用方应用。空栈返回 null。
+  // - popRedo(currentSnapshot)：对称地从 redo 弹出，把当前快照压入 undo。
+  // 调用方负责按记录的 kind 生成 currentSnapshot 与应用记录。
+  function createHistoryStack(limit = 100) {
+    const max = Math.max(1, Math.round(Number(limit) || 100));
+    const undo = [];
+    const redo = [];
+    const trim = () => { while (undo.length > max) undo.shift(); };
+    return {
+      undoLength: () => undo.length,
+      redoLength: () => redo.length,
+      canUndo: () => undo.length > 0,
+      canRedo: () => redo.length > 0,
+      peekUndo: () => undo[undo.length - 1] || null,
+      peekRedo: () => redo[redo.length - 1] || null,
+      push: (record) => {
+        undo.push(record);
+        trim();
+        redo.length = 0;
+      },
+      popUndo: (currentSnapshot) => {
+        if (!undo.length) return null;
+        const record = undo.pop();
+        redo.push(currentSnapshot);
+        return record;
+      },
+      popRedo: (currentSnapshot) => {
+        if (!redo.length) return null;
+        const record = redo.pop();
+        undo.push(currentSnapshot);
+        trim();
+        return record;
+      },
+      clear: () => { undo.length = 0; redo.length = 0; },
+      clearRedo: () => { redo.length = 0; },
+    };
+  }
+
   window.AsrEditorUtils = {
     buildReplacementPreview,
     cueMetrics,
+    joinSegmentTexts,
     formatHumanDuration,
     formatGapRemoveDuration,
     splitCharOffsetAtTime,
     findAdjacentCueIndex,
+    findCueNavigationTarget,
+    findCueSelectionExtensionTarget,
+    resolveMergedGroupInheritance,
     getSrtExportOffset,
+    effectiveColorName,
+    buildSrtPayload,
+    buildPlainTextPayload,
     fileBasename,
     findProjectMediaFile,
     normalizeGapRemoveGaps,
@@ -441,5 +739,14 @@
     buildGapRemovedIntervals,
     buildFfconcat,
     configuredEnterAction,
+    createHistoryStack,
+    PREVIEW_MIN_WIDTH,
+    PREVIEW_MIN_HEIGHT,
+  DEFAULT_PREVIEW_GEOMETRY,
+  DEFAULT_STICKER_GEOMETRY,
+  normalizePreviewGeometry,
+    clampPreviewGeometry,
+    previewGeometryToCss,
+    applyPreviewGeometryDelta,
   };
 })();

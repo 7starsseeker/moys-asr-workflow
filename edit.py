@@ -31,6 +31,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from maw.project import ProjectValidationFailed, normalize_project
 from waveform import (
     DEFAULT_PEAKS_PER_SECOND,
     WaveformError,
@@ -136,6 +137,7 @@ def render_editor_page(**context: str) -> str:
         "__EDITOR_CSS__": read_web_asset("editor.css").rstrip(),
         "__WAVEFORM_CSS__": read_web_asset("waveform.css").rstrip(),
         "__EDITOR_UTILS_JS__": read_web_asset("editor-utils.js").rstrip(),
+        "__EDITOR_I18N_JS__": read_web_asset("editor-i18n.js").rstrip(),
         "__WAVEFORM_JS__": read_web_asset("waveform.js").rstrip(),
         "__EDITOR_JS__": read_web_asset("editor.js").rstrip(),
         "__TITLE__": context["title"],
@@ -146,6 +148,7 @@ def render_editor_page(**context: str) -> str:
         "__STICKER_ROOT_JSON__": context["sticker_root_json"],
         "__STICKER_URL_PREFIX_JSON__": context.get("sticker_url_prefix_json", '""'),
         "__SERVER_CONFIG_JSON__": context.get("server_config_json", "null"),
+        "__UI_LANGUAGE_JSON__": context.get("ui_language_json", "null"),
         "__GENERATED_AT__": context["generated_at"],
         "__JSON_DISPLAY__": context["json_display"],
         "__JSON_NAME_CLASS__": context["json_name_class"],
@@ -257,9 +260,10 @@ def main():
         print(f"错误: JSON 文件不存在 - {json_path}")
         return 1
 
-    data = json.loads(json_path.read_text(encoding="utf-8"))
-    if "segments" not in data:
-        print(f"错误: JSON 缺少 segments 字段")
+    try:
+        data = normalize_project(json.loads(json_path.read_text(encoding="utf-8")))
+    except ProjectValidationFailed as exc:
+        print(f"错误: {exc}")
         return 1
 
     # 媒体

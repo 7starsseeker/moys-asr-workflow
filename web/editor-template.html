@@ -17,24 +17,55 @@ __WAVEFORM_CSS__
   <span class="json-name __JSON_NAME_CLASS__" id="json-name" title="点击复制 JSON 文件名">__JSON_DISPLAY__</span>
 </h1>
 <div class="toolbar row-actions">
-  <button id="open-project" title="可同选工程 JSON 与媒体；仅选 JSON 时会询问是否继续选择关联媒体">打开工程</button>
+  <span class="dropdown button-split" id="open-project-dropdown">
+    <button id="open-project" title="可同选工程 JSON 与媒体；仅选 JSON 时会询问是否继续选择关联媒体">打开工程</button>
+    <button type="button" id="open-project-menu-btn" class="split-caret" aria-label="打开更多文件">▾</button>
+    <div class="dropdown-menu" id="open-project-menu">
+      <div class="dropdown-item" id="load-media" role="menuitem" tabindex="0">加载媒体</div>
+      <div class="dropdown-item" id="load-srt" role="menuitem" tabindex="0">加载字幕</div>
+    </div>
+  </span>
   <div class="dropdown" id="recent-projects" hidden>
     <button type="button" id="recent-projects-toggle" title="打开本机最近使用的工程">最近工程</button>
-    <div class="dropdown-menu" id="recent-projects-menu"></div>
+    <div class="dropdown-menu" id="recent-projects-menu">
+      <label class="dropdown-item recent-project-setting" id="server-project-settings" hidden
+             title="下次不带 JSON 路径启动服务器时，自动恢复上次打开的工程">
+        <input type="checkbox" id="auto-open-last-project" checked> 自动打开上次工程
+      </label>
+      <div class="dropdown-separator" id="recent-projects-separator" hidden></div>
+      <div id="recent-projects-list"></div>
+    </div>
   </div>
-  <button id="load-media" title="选择本地媒体文件并加载到播放器">加载媒体</button>
-  <button id="save-project" title="保存回服务器启动时指定的工程 JSON" hidden>保存工程</button>
-  <button id="save-project-as" title="另存为到当前工程目录" hidden>另存为…</button>
-  <button id="sticker-root-btn" title="设置表情包根目录" style="font-size:16px;line-height:1;padding:2px 8px;">🦊</button>
+  <span class="dropdown button-split" id="save-project-dropdown" hidden>
+    <button id="save-project" title="保存回服务器启动时指定的工程 JSON">保存工程</button>
+    <button type="button" id="save-project-menu-btn" class="split-caret" aria-label="保存工程的更多选项">▾</button>
+    <div class="dropdown-menu" id="save-project-menu">
+      <div class="dropdown-item" id="save-project-as" role="menuitem" tabindex="0">另存为…</div>
+    </div>
+  </span>
+  <button id="sticker-root-btn" title="设置表情包根目录">🦊 表情包</button>
+  <span class="undo-redo-group" role="group" aria-label="撤销重做">
+    <button type="button" id="undo-btn" title="撤销 (Ctrl/Cmd+Z)" disabled>↶ 撤销</button>
+    <button type="button" id="redo-btn" title="重做 (Ctrl/Cmd+Shift+Z)" disabled>↷ 重做</button>
+  </span>
 
   <span class="right-group">
     <button id="download-srt">导出字幕</button>
+    <span class="dropdown" id="subtitle-export-dropdown" hidden>
+      <button id="subtitle-export-btn" title="导出完整字幕或按颜色分别导出字幕">导出字幕 ▾</button>
+      <div class="dropdown-menu" id="subtitle-export-menu">
+        <div class="dropdown-item" id="download-full-srt">导出完整字幕（SRT）</div>
+        <div class="dropdown-item" id="download-color-srt">按颜色导出字幕（SRT）</div>
+        <div class="dropdown-item" id="download-plain-text">导出纯文本（TXT）</div>
+      </div>
+    </span>
     <button id="download-json">导出工程</button>
     <span class="dropdown gap-removed-export-dropdown" id="gap-removed-export-dropdown" hidden>
       <button id="gap-removed-export-btn" title="导出应用当前空隙移除结果的字幕、时间线或保留区域计划">导出去空隙版本 ▾</button>
       <div class="dropdown-menu" id="gap-removed-export-menu">
         <div class="dropdown-item" id="download-gap-removed-srt" title="按移除静音空隙后的时间轴导出字幕；原工程时间不变">字幕 SRT</div>
-        <div class="dropdown-item" id="download-gap-removed-otio" title="导出原视频/音频的去空隙 OTIO 时间线，供支持 OTIO 的剪辑工具或工作流使用">OTIO 工程</div>
+        <div class="dropdown-item" id="download-gap-removed-color-srt" title="按移除静音空隙后的时间轴，为每种已使用颜色分别导出一份字幕">按颜色导出字幕</div>
+        <div class="dropdown-item" id="download-gap-removed-otio" title="导出原视频/音频的去空隙 OTIO 时间线，供支持 OTIO 的剪辑工具或工作流使用">时间线 OTIO 工程</div>
         <div class="dropdown-item" id="download-gap-removed-ffconcat" title="导出 FFmpeg concat demuxer 可读取的保留区间；流复制的切点精度受关键帧和编码包限制">FFconcat 文件</div>
         <div class="dropdown-item" id="download-gap-removed-regions-json" title="以毫秒为单位导出原媒体中的全部保留区域，供自定义脚本或工具读取">保留区域 JSON</div>
         <div class="dropdown-item" id="download-gap-removed-sticker-otio" title="按移除静音空隙后的时间轴导出表情包图片轨道 OTIO；完全落在空隙内的表情包会被丢弃">表情包 OTIO</div>
@@ -50,37 +81,17 @@ __WAVEFORM_CSS__
   </span>
 </div>
 
-<div class="toolbar row-subtitle">
-  <span class="info layout-toolbar-label">字幕</span>
-  <span class="input-clear" id="search-wrap">
-    <input type="text" id="search" placeholder="过滤字幕…" autocomplete="off">
-    <span class="clear-x" id="search-clear" title="清空">×</span>
+<div class="toolbar main-toolbar">
+  <span class="waveform-tool-switch" role="group" aria-label="波形工具">
+    <button type="button" data-waveform-tool="select" class="active" title="选择工具（V，默认）：点击选中、拖动移动、拖动边界调整；Ctrl/Shift 多选，Alt 切换禁用，Alt 拖共享边界只动一侧">
+      <svg class="toolbar-button-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.75 12.25 8 8 9.25 6.25 13.5 3 1.75Z"/><path d="m8.3 9.2 3.2 3.05"/></svg>
+      <span>选择</span>
+    </button>
+    <button type="button" data-waveform-tool="razor" title="分割工具（R）：点击字幕块在指针位置安全拆分（按词/字级时间码对齐，拒绝 100ms 以内的边缘拆分）；Esc 切回选择">
+      <svg class="toolbar-button-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4" cy="4" r="2.25"/><circle cx="4" cy="12" r="2.25"/><path d="m5.8 5.35 7.2 5.4M5.8 10.65 13 5.25"/></svg>
+      <span>分割</span>
+    </button>
   </span>
-  <label class="toggle"><input type="checkbox" id="overlay-toggle" checked> 字幕预览</label>
-  <span class="info">显示 <b id="visible-count">0</b> / <b id="total-count">0</b></span>
-  <label class="toggle"><input type="checkbox" id="hide-disabled-toggle"> 隐藏禁用</label>
-  <span class="sep"></span>
-  <button id="replace-btn">批量替换…</button>
-  <span class="sep"></span>
-  <span class="info">字数阈值</span>
-  <input type="number" id="charcount-threshold" min="1" max="200" value="16">
-  <button id="filter-over" title="只显示超过阈值的字幕（再次点击关闭）">仅看超长</button>
-  <span class="sep"></span>
-  <span class="info">当前 <b id="now">00:00.000</b></span>
-  <span class="info">已选 <b id="sel-count">0</b></span>
-</div>
-
-<div class="toolbar row-waveform" id="waveform-toolbar">
-  <span class="info">波形</span>
-  <span class="waveform-mode-switch" role="group" aria-label="波形模式">
-    <button type="button" data-waveform-mode="hidden">隐藏</button>
-    <button type="button" data-waveform-mode="basic">基础</button>
-    <button type="button" data-waveform-mode="multi">多行</button>
-  </span>
-  <span class="sep"></span>
-  <button type="button" id="gap-remove-manage" title="打开可拖动的移除静音空隙工具窗" aria-expanded="false" aria-controls="gap-remove-panel">移除静音空隙</button>
-  <label class="toggle gap-skip-toggle" title="播放时跳过已移除的静音空隙；左键定位到空隙内时可临时预览"><input type="checkbox" id="gap-skip-playback" checked> 跳过空隙</label>
-  <span class="gap-remove-summary" id="gap-remove-summary">未扫描空隙</span>
   <span class="sep"></span>
   <span class="info layout-toolbar-label">布局</span>
   <select id="layout-preset" title="布局只控制面板摆放，不改变波形基础/多行模式">
@@ -94,8 +105,14 @@ __WAVEFORM_CSS__
   <button type="button" id="layout-export" title="导出当前布局 JSON">导出布局</button>
   <button type="button" id="layout-import" title="导入布局 JSON">导入布局</button>
   <input type="file" id="layout-import-file" accept=".layout.json,.json,application/json" style="display:none">
-  <button type="button" id="editor-settings-toggle" title="展开字幕、波形与导出设置" aria-expanded="false" aria-controls="editor-settings-panel">⚙ 设置</button>
-  <span class="waveform-status" id="waveform-status">等待波形数据</span>
+  <span class="sep"></span>
+  <span class="info">当前 <b id="now">00:00.000</b></span>
+  <span class="info">已选 <b id="sel-count">0</b></span>
+  <span class="toolbar-utility-group" role="group" aria-label="编辑器工具">
+    <button type="button" id="language-toggle" class="language-toggle" title="Switch to English">🌐English</button>
+    <button type="button" id="editor-settings-toggle" title="展开字幕、波形与导出设置" aria-expanded="false" aria-controls="editor-settings-panel">🔧 设置</button>
+    <button type="button" id="help-toggle" title="查看鼠标操作与键盘快捷键" aria-expanded="false" aria-controls="help-panel">🤔 帮助</button>
+  </span>
 </div>
 
 <!-- 可拖动的非模态移除静音空隙工具窗 -->
@@ -108,18 +125,6 @@ __WAVEFORM_CSS__
     <button type="button" id="gap-remove-close" class="gap-remove-close" title="关闭（Esc）" aria-label="关闭移除静音空隙工具窗">×</button>
   </header>
   <div class="gap-remove-panel-body">
-    <section class="gap-remove-operation-section" aria-labelledby="gap-remove-operation-title">
-      <div class="gap-remove-operation-header">
-        <span class="gap-remove-operation-title" id="gap-remove-operation-title">空隙操作</span>
-        <select id="gap-remove-operation-mode">
-          <option value="none">无</option>
-          <option value="boundary_drag">拖动边界</option>
-          <option value="middle_drag" selected>中键拖动</option>
-        </select>
-      </div>
-      <p>可选择<strong>拖动边界</strong>或<strong>中键拖动</strong>进行人工修正；Alt+左键始终切换整段。</p>
-      <small>中键拖动默认增加静音；按住 Alt 才恢复声音。边界碰到另一空隙时会合并。</small>
-    </section>
     <div class="gap-remove-parameters-heading">
       <span>扫描参数</span>
       <small>按波形音量扫描内部空隙，不改写原时间轴</small>
@@ -184,35 +189,60 @@ __WAVEFORM_CSS__
     <div class="gap-remove-list" id="gap-remove-list" aria-live="polite">尚未扫描空隙。</div>
     <footer class="gap-remove-panel-footer">
       <span>滚轮可调数值 · Esc 关闭</span>
-      <button type="button" id="gap-remove-restore-all">全部恢复</button>
+      <button type="button" id="gap-remove-clear-all" class="danger">全部清理</button>
     </footer>
   </div>
 </aside>
 
 <section class="editor-settings-panel" id="editor-settings-panel" aria-label="MAWE 设置" hidden>
   <div class="editor-settings-group">
-    <span class="editor-settings-title">字幕</span>
-    <label class="editor-settings-item">拆分按键
+    <span class="editor-settings-title">字幕列表和编辑区</span>
+    <div class="editor-settings-item editor-settings-list-fields editor-settings-display-row">
+      <span>字幕列表显示</span>
+      <span class="editor-settings-toggle-group">
+        <label class="toggle"><input type="checkbox" id="cue-list-show-index" checked> 序号</label>
+        <label class="toggle"><input type="checkbox" id="cue-list-show-time" checked> 时间码</label>
+        <label class="toggle"><input type="checkbox" id="cue-list-show-sticker"> 表情包</label>
+        <label class="toggle"><input type="checkbox" id="cue-list-show-charcount" checked> 字数</label>
+      </span>
+    </div>
+    <div class="editor-settings-item editor-settings-list-fields editor-settings-display-row">
+      <span>字幕编辑显示</span>
+      <span class="editor-settings-toggle-group">
+        <label class="toggle"><input type="checkbox" id="cue-editor-show-navigation"> 跳转按钮</label>
+        <label class="toggle"><input type="checkbox" id="cue-editor-show-time-actions" checked> 时间操作</label>
+        <label class="toggle"><input type="checkbox" id="cue-editor-show-sticker"> 表情包</label>
+      </span>
+    </div>
+    <label class="editor-settings-item" title="编辑字幕时，选择 Enter 或 Ctrl+Enter 在文字光标处拆分；另一个按键用于保存">
+      字幕（编辑状态下）拆分按键
       <select id="split-key">
         <option value="ctrl-enter" selected>Ctrl+Enter</option>
         <option value="enter">Enter</option>
       </select>
     </label>
-    <div class="editor-settings-item editor-settings-list-fields">
-      <span>字幕列表显示内容</span>
-      <label class="toggle"><input type="checkbox" id="cue-list-show-index" checked> 序号</label>
-      <label class="toggle"><input type="checkbox" id="cue-list-show-time" checked> 时间码</label>
-      <label class="toggle"><input type="checkbox" id="cue-list-show-sticker"> 表情包</label>
-      <label class="toggle"><input type="checkbox" id="cue-list-show-charcount" checked> 字数</label>
-    </div>
-    <div class="editor-settings-item editor-settings-list-fields">
-      <span>字幕编辑显示内容</span>
-      <label class="toggle"><input type="checkbox" id="cue-editor-show-navigation" checked> 前后跳转</label>
-      <label class="toggle"><input type="checkbox" id="cue-editor-show-sticker"> 表情包</label>
-    </div>
   </div>
   <div class="editor-settings-group">
-    <span class="editor-settings-title">波形</span>
+    <span class="editor-settings-title">通用操作</span>
+    <label class="editor-settings-item" title="字幕列表与波形字幕块的普通单击行为；双击编辑不受影响">
+      点击字幕块时
+      <select id="click-behavior">
+        <option value="select-only" selected>仅选中</option>
+        <option value="select-and-seek">选中并跳转</option>
+      </select>
+    </label>
+    <small class="editor-settings-hint" id="click-behavior-hint">「仅选中」时可以用F键功能来跳转并播放字幕</small>
+    <label class="toggle editor-settings-item" title="开启后，普通点击属于表情包或颜色分组的字幕时，会同时选中该分组的全部成员；关闭时只选中点击的那一条">
+      <input type="checkbox" id="select-group-members"> 同时选中分组内项目
+    </label>
+    <label class="editor-settings-item" title="合并两条字幕时，中间插入的字符（如果不需要可以留空）">
+      合并字幕时插入字符
+      <input type="text" id="merge-join-text" placeholder="留空则直接拼接">
+    </label>
+    <small class="editor-settings-hint">合并两条字幕时，中间插入的字符（如果不需要可以留空）</small>
+  </div>
+  <div class="editor-settings-group">
+    <span class="editor-settings-title">音频波形区</span>
     <span class="editor-settings-item" id="waveform-window-setting">显示窗口
       <span class="editor-settings-stepper">
         <button type="button" id="waveform-zoom-out" title="缩小时间轴">−</button>
@@ -235,11 +265,35 @@ __WAVEFORM_CSS__
         <option value="30">30 秒</option>
       </select>
     </label>
+    <label class="editor-settings-item" id="waveform-row-height-setting" title="多行波形每一行的高度；也可用 Ctrl+Shift+滚轮 在波形上直接调节">每行高度
+      <select id="waveform-row-height">
+        <option value="64">64 px</option>
+        <option value="80">80 px</option>
+        <option value="96">96 px</option>
+        <option value="120" selected>120 px</option>
+        <option value="144">144 px</option>
+        <option value="168">168 px</option>
+      </select>
+    </label>
+    <label class="toggle editor-settings-item" title="在多行波形中，为成组（颜色/表情包）字幕在块上方显示队长皇冠与组内序号">
+      <input type="checkbox" id="waveform-show-group-badges" checked> 显示分组标记
+    </label>
     <label class="editor-settings-item">禁用波形
       <select id="waveform-disabled-display">
         <option value="dim" selected>淡化</option>
         <option value="hidden">完全隐藏</option>
       </select>
+    </label>
+    <label class="editor-settings-item" title="移除静音空隙的人工修正方式；Alt+左键始终切换整段；中键拖动默认增加静音，按住 Alt 才恢复声音，边界碰到另一空隙时会合并">
+      空隙区段操作方式
+      <select id="gap-remove-operation-mode">
+        <option value="none">无</option>
+        <option value="boundary_drag" selected>拖动边界</option>
+        <option value="middle_drag">中键拖动</option>
+      </select>
+    </label>
+    <label class="toggle editor-settings-item" title="启用后，在波形空白区域按住左键拖动时，播放指针会实时跟随鼠标位置">
+      <input type="checkbox" id="waveform-drag-playhead" checked> 允许拖动指针
     </label>
   </div>
   <div class="editor-settings-group">
@@ -247,40 +301,83 @@ __WAVEFORM_CSS__
     <label class="toggle editor-settings-item" title="只影响导出的 SRT，不改动工程或 OTIO 的时间轴">
       <input type="checkbox" id="export-start-at-zero" checked> SRT 首条从 0 开始
     </label>
-  </div>
-  <div class="editor-settings-group" id="server-project-settings" hidden>
-    <span class="editor-settings-title">本机工程</span>
-    <label class="toggle editor-settings-item" title="下次不带 JSON 路径启动服务器时，自动恢复上次打开的工程">
-      <input type="checkbox" id="auto-open-last-project" checked> 启动时打开上次工程
+    <label class="toggle editor-settings-item" title="勾选后按颜色导出会先选择一个 SRT 文件名作为前缀，再下载「前缀_颜色.srt」；取消勾选则逐个颜色弹出保存对话框">
+      <input type="checkbox" id="export-color-unified" checked> 彩色字幕统一导出
     </label>
+    <small class="editor-settings-hint">选中时，会将所有不同颜色的字幕按「文件名_颜色」格式统一导出；否则每个颜色都会弹出单独的保存框。</small>
+    <div id="server-auto-save-settings" hidden>
+      <span class="editor-settings-title">保存</span>
+      <label class="toggle editor-settings-item" title="仅服务器版编辑器可将改动保存回当前工程 JSON">
+        <input type="checkbox" id="auto-save-project" checked> 自动保存
+      </label>
+      <label class="editor-settings-item" id="auto-save-interval-field" hidden>自动保存间隔（秒）
+        <input id="auto-save-interval" type="number" min="5" max="3600" step="1" value="30">
+      </label>
+    </div>
+  </div>
+</section>
+
+<section class="help-panel" id="help-panel" aria-label="操作帮助" hidden>
+  <div class="help-group">
+    <span class="help-title">字幕操作</span>
+    <span><kbd>单击</kbd> 选中</span>
+    <span><kbd>双击</kbd> 编辑</span>
+    <span><kbd>Enter</kbd> 进入字幕编辑区（仅单选时）</span>
+    <span><kbd>Esc</kbd> 退出字幕编辑区（文本编辑时）</span>
+    <span><kbd>Esc</kbd> 清除字幕选择（非编辑状态）</span>
+    <span><kbd>右键</kbd> 菜单</span>
+    <span><kbd>Shift+点击</kbd> 连选</span>
+    <span><kbd>Ctrl+点击</kbd> 多选</span>
+    <span><kbd>Alt+点击</kbd> 切换字幕禁用</span>
+    <span><kbd>C</kbd> 合并所选字幕</span>
+    <span><kbd id="help-split-key">Ctrl+Enter</kbd>（编辑字幕文本时）在文字光标处拆分</span>
+    <span><kbd>Ctrl+A</kbd> 选中所有字幕（非编辑状态）</span>
+  </div>
+  <div class="help-group">
+    <span class="help-title">波形</span>
+    <span><kbd>双击波形</kbd> 播放/暂停</span>
+    <span><kbd>右键波形背景</kbd> 显示菜单</span>
+    <span><kbd id="help-waveform-split-key">B</kbd> 在红色播放指针处拆分字幕</span>
+    <span><kbd>V</kbd> 选择工具 <kbd>R</kbd> 分割工具</span>
+    <span><kbd>Shift+滚轮</kbd> 调整波形振幅</span>
+    <span><kbd>Ctrl+滚轮</kbd> 调整时间缩放/每行长度</span>
+    <span><kbd>Ctrl+Shift+滚轮</kbd> 调整每行高度</span>
+  </div>
+  <div class="help-group">
+    <span class="help-title">静音空隙</span>
+    <span><kbd>Alt+点击静音空隙区段</kbd> 切换移除/保留</span>
+    <span class="help-note">空隙区段操作方式设为「中键拖动」时：</span>
+    <span><kbd>中键拖动</kbd> 增加静音区段</span>
+    <span><kbd>Alt+中键拖动</kbd> 增加恢复区段</span>
+  </div>
+  <div class="help-group">
+    <span class="help-title">播放与编辑</span>
+    <span><kbd>空格</kbd> 播放/暂停 <kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> 倍速 ×0.5/重置/×2</span>
+    <span><kbd>A</kbd>或<kbd>W</kbd> 上一条字幕 <kbd>D</kbd>或<kbd>S</kbd> 下一条字幕</span>
+    <span><kbd>Shift+A/W</kbd> 向前多选 <kbd>Shift+D/S</kbd> 向后多选</span>
+    <span><kbd>F</kbd> 跳转并播放选中字幕</span>
+    <span><kbd>Delete</kbd> 删除所选字幕</span>
+    <span><kbd>Ctrl+Z</kbd> 撤销</span>
+    <span><kbd>Ctrl+Shift+Z</kbd> 重做</span>
   </div>
 </section>
 
 <input type="file" id="open-project-file" accept=".json,application/json,video/*,audio/*" multiple style="display:none">
 <input type="file" id="load-media-file" accept="video/*,audio/*" style="display:none">
-
-<div class="header-info">
-  <span><kbd>单击</kbd> 跳转</span>
-  <span><kbd>双击</kbd> 编辑</span>
-  <span><kbd>右键</kbd> 菜单</span>
-  <span><kbd>Shift+点击</kbd> 范围选</span>
-  <span><kbd>Ctrl+点击</kbd> 切换选</span>
-  <span><kbd>Alt+点击</kbd> 禁用切换</span>
-  <span><kbd>Alt+点击空隙</kbd> 移除/保留</span>
-  <span><kbd>中键拖动</kbd> 增加静音</span>
-  <span><kbd>Alt+中键拖动</kbd> 恢复声音</span>
-  <span><kbd>Ctrl+拖动</kbd> 新增字幕</span>
-  <span><kbd>Shift+滚轮</kbd> 调整波形振幅</span>
-  <span><kbd>空格</kbd> 播放/暂停</span>
-  <span><kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> 倍速 ×0.5/重置/×2</span>
-  <span><kbd>Ctrl+Z</kbd> 撤销</span>
-</div>
+<input type="file" id="load-srt-file" accept=".srt,text/plain" style="display:none">
 
 <div class="editor-workspace waveform-basic" id="editor-workspace">
   <div class="player-wrap">
-    __MEDIA_HTML__
-    <div class="player-empty" id="player-empty">加载媒体后显示视频</div>
-    <div id="overlay" class="subtitle-overlay hidden"><span></span></div>
+    <div class="toolbar player-toolbar">
+      <span class="info layout-toolbar-label">媒体</span>
+      <label class="toggle"><input type="checkbox" id="overlay-toggle" checked> 预览字幕</label>
+      <label class="toggle" title="在视频画面右上角预览当前时间的表情包"><input type="checkbox" id="sticker-overlay-toggle"> 预览表情包</label>
+    </div>
+    <div class="player-stage">
+      __MEDIA_HTML__
+      <div class="player-empty" id="player-empty">加载媒体后显示视频</div>
+      <div id="overlay" class="subtitle-overlay geo-box hidden" tabindex="0" role="group" aria-label="字幕预览位置。可拖动调整；方向键移动，按住 Shift 加速，按住 Alt 配合方向键调整大小，Enter 或空格显示控制点，Esc 退出。"><span></span><span class="overlay-handle" data-handle="nw" aria-hidden="true"></span><span class="overlay-handle" data-handle="n" aria-hidden="true"></span><span class="overlay-handle" data-handle="ne" aria-hidden="true"></span><span class="overlay-handle" data-handle="e" aria-hidden="true"></span><span class="overlay-handle" data-handle="se" aria-hidden="true"></span><span class="overlay-handle" data-handle="s" aria-hidden="true"></span><span class="overlay-handle" data-handle="sw" aria-hidden="true"></span><span class="overlay-handle" data-handle="w" aria-hidden="true"></span></div>
+    </div>
   </div>
   <section class="current-cue-panel" id="current-cue-panel" aria-label="当前字幕编辑区">
     <div class="cue-panel-layout">
@@ -297,7 +394,7 @@ __WAVEFORM_CSS__
             <input type="text" id="cue-panel-duration" inputmode="decimal" autocomplete="off">
           </label>
         </div>
-        <button type="button" id="cue-panel-split">在光标处拆分</button>
+        <button type="button" id="cue-panel-split">在光标处拆分（<kbd id="cue-panel-split-key">Ctrl+Enter</kbd>）</button>
       </div>
       <div class="cue-panel-text-wrap">
         <textarea id="cue-panel-text" rows="3" placeholder="选择一条字幕开始编辑…"></textarea>
@@ -313,6 +410,20 @@ __WAVEFORM_CSS__
     </div>
   </section>
   <section class="waveform-pane" id="waveform-pane" aria-label="音频波形" tabindex="-1">
+    <div class="toolbar waveform-toolbar">
+      <span class="info layout-toolbar-label">波形</span>
+      <span class="waveform-mode-switch" role="group" aria-label="波形模式">
+        <button type="button" data-waveform-mode="multi">多行</button>
+        <button type="button" data-waveform-mode="basic">基础</button>
+        <button type="button" data-waveform-mode="hidden">隐藏</button>
+      </span>
+      <span class="sep"></span>
+      <button type="button" id="gap-remove-manage" title="打开可拖动的移除静音空隙工具窗" aria-expanded="false" aria-controls="gap-remove-panel">移除静音空隙</button>
+      <label class="toggle gap-skip-toggle" title="播放时跳过已移除的静音空隙；左键定位到空隙内时可临时预览"><input type="checkbox" id="gap-skip-playback" checked> 播放时跳过空隙</label>
+      <span class="gap-remove-summary" id="gap-remove-summary">未扫描空隙</span>
+      <span class="sep"></span>
+      <span class="waveform-status" id="waveform-status">等待波形数据</span>
+    </div>
     <div class="waveform-scroll" id="waveform-scroll">
       <div class="waveform-content" id="waveform-content"></div>
     </div>
@@ -325,6 +436,21 @@ __WAVEFORM_CSS__
   <div class="layout-resizer layout-resizer-h2" id="layout-resizer-h2" data-layout-resizer="row-middle" title="拖动调整当前字幕与字幕列表高度"></div>
   <div class="layout-drop-preview" id="layout-drop-preview" aria-hidden="true"></div>
   <div class="cues-container" id="cues-container">
+    <div class="toolbar cue-list-toolbar">
+      <span class="info layout-toolbar-label">字幕</span>
+      <span class="input-clear" id="search-wrap">
+        <input type="text" id="search" placeholder="过滤字幕…" autocomplete="off">
+        <span class="clear-x" id="search-clear" title="清空">×</span>
+      </span>
+      <span class="info">显示 <b id="visible-count">0</b> / <b id="total-count">0</b></span>
+      <label class="toggle"><input type="checkbox" id="hide-disabled-toggle"> 隐藏禁用</label>
+      <span class="sep"></span>
+      <button id="replace-btn">批量替换…</button>
+      <span class="sep"></span>
+      <span class="info">字数阈值</span>
+      <input type="number" id="charcount-threshold" min="1" max="200" value="16">
+      <button id="filter-over" title="只显示超过阈值的字幕（再次点击关闭）">仅看超长</button>
+    </div>
     <div class="cues-empty" id="cues-empty">加载工程后显示字幕列表</div>
   </div>
 </div>
@@ -339,7 +465,7 @@ __WAVEFORM_CSS__
     </div>
     <div class="actions">
       <button type="button" id="project-media-later">稍后加载</button>
-      <button type="button" id="project-media-select" class="danger">选择媒体</button>
+      <button type="button" id="project-media-select" class="primary">选择媒体</button>
     </div>
   </div>
 </div>
@@ -360,7 +486,7 @@ __WAVEFORM_CSS__
     <div class="preview" id="replace-preview">输入查找内容查看预览</div>
     <div class="actions">
       <button id="replace-cancel">取消</button>
-      <button id="replace-confirm" class="danger">替换全部</button>
+      <button id="replace-confirm" class="primary">替换全部</button>
     </div>
   </div>
 </div>
@@ -393,23 +519,23 @@ __WAVEFORM_CSS__
 
 <!-- 表情包根目录 modal -->
 <div class="modal-mask" id="sticker-root-modal">
-  <div class="modal" style="width: 540px;">
+  <div class="modal">
     <h3>设置表情包根目录</h3>
-    <div style="font-size:12px;color:#888;margin-bottom:8px;">
+    <div class="modal-desc">
       所有表情包路径都基于此根目录。修改后页面所有缩略图会立刻按新路径加载。
     </div>
-    <label>当前根目录（绝对路径）</label>
-    <div style="display:flex;gap:6px;align-items:stretch;">
-      <input type="text" id="sticker-root-input" placeholder="如 D:/AI/AI音频转录/表情包" autocomplete="off" style="flex:1 1 auto;">
-      <button id="sticker-root-pick" title="浏览本地文件夹（同时会重新扫描表情包列表）" style="flex:0 0 auto;padding:0 12px;">📁 浏览…</button>
+    <label for="sticker-root-input">当前根目录（绝对路径）</label>
+    <div class="modal-field-row">
+      <input type="text" id="sticker-root-input" placeholder="如 D:/AI/AI音频转录/表情包" autocomplete="off">
+      <button id="sticker-root-pick" title="浏览本地文件夹（同时会重新扫描表情包列表）">📁 浏览…</button>
     </div>
     <input type="file" id="sticker-root-folder-input" webkitdirectory directory multiple style="display:none">
-    <div style="font-size:11px;color:#777;margin-top:6px;">
+    <div class="modal-hint">
       支持 OS 路径（D:/foo/bar）或 file:// URL。手动改路径只替换前缀；点 📁 浏览选本地文件夹会重新扫描表情包。
     </div>
     <div class="actions">
       <button id="sticker-root-cancel">取消</button>
-      <button id="sticker-root-confirm" class="danger">应用</button>
+      <button id="sticker-root-confirm" class="primary">应用</button>
     </div>
   </div>
 </div>
@@ -418,10 +544,11 @@ __WAVEFORM_CSS__
 <div class="ctxmenu" id="ctxmenu"></div>
 
 <!-- 拖拽加载遮罩 -->
-<div class="drag-overlay" id="drag-overlay"><div class="drag-hint">📥 松开以加载文件（视频 / 音频 / JSON）</div></div>
+<div class="drag-overlay" id="drag-overlay"><div class="drag-hint">📥 松开以加载文件（视频 / 音频 / JSON / SRT）</div></div>
 
 <script>
 __EDITOR_UTILS_JS__
+__EDITOR_I18N_JS__
 __WAVEFORM_JS__
 __EDITOR_JS__
 </script>
